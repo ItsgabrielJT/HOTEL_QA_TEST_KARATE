@@ -1,0 +1,4 @@
+{
+  "maxAttempts": 8,
+  "contractGapMessage": "El backend actual libera o cachea el hold, por lo que estos casos quedan fuera del suite por defecto hasta que el contrato se formalice."
+}
