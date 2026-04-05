@@ -1,0 +1,3 @@
+{
+  "note": "La API expuesta en api.md no publica un endpoint para disparar el worker ni un hook de viaje en el tiempo."
+}
