@@ -1,0 +1,56 @@
+{
+  "hotels": {
+    "downtown": "e2d13a50-bd49-4f9a-821e-643ec5529cdf",
+    "resort": "5dcb1caa-3ad2-41b0-b820-f9ea74780f5c"
+  },
+  "rooms": {
+    "downtown101": {
+      "id": "15721d79-fd64-480a-8aa2-4f58abc3a806",
+      "roomNumber": "101",
+      "hotelId": "e2d13a50-bd49-4f9a-821e-643ec5529cdf",
+      "type": "SINGLE",
+      "capacity": 1,
+      "pricePerNight": 80
+    },
+    "downtown102": {
+      "id": "5815336d-f35c-4519-bee4-a32d9e865ed9",
+      "roomNumber": "102",
+      "hotelId": "e2d13a50-bd49-4f9a-821e-643ec5529cdf",
+      "type": "SINGLE",
+      "capacity": 1,
+      "pricePerNight": 85
+    },
+    "downtown201": {
+      "id": "a8024576-5c36-4e86-ae90-f22a3b9e25b5",
+      "roomNumber": "201",
+      "hotelId": "e2d13a50-bd49-4f9a-821e-643ec5529cdf",
+      "type": "DOUBLE",
+      "capacity": 2,
+      "pricePerNight": 150
+    },
+    "downtown202": {
+      "id": "179b1dcf-f4e9-4a38-81f4-79b623f9910b",
+      "roomNumber": "202",
+      "hotelId": "e2d13a50-bd49-4f9a-821e-643ec5529cdf",
+      "type": "DOUBLE",
+      "capacity": 2,
+      "pricePerNight": 155
+    },
+    "downtown203": {
+      "id": "a76c2ab0-ca82-408c-a33b-173ae72fff32",
+      "roomNumber": "203",
+      "hotelId": "e2d13a50-bd49-4f9a-821e-643ec5529cdf",
+      "type": "DOUBLE",
+      "capacity": 3,
+      "pricePerNight": 160
+    },
+    "resort305": {
+      "id": "4b8affb3-267e-4cba-a671-6e023f7087a5",
+      "roomNumber": "305",
+      "hotelId": "5dcb1caa-3ad2-41b0-b820-f9ea74780f5c",
+      "type": "SUITE",
+      "capacity": 5,
+      "pricePerNight": 500
+    }
+  }
+}
