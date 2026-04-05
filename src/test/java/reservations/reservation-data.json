@@ -1,0 +1,11 @@
+{
+  "maxAttempts": 8,
+  "seedReservation": {
+    "reservationCode": "0NPLUSYK",
+    "reservationId": "cf9cc98b-5055-43ab-a424-7b9680af4fa7",
+    "roomNumber": "102",
+    "hotelId": "e2d13a50-bd49-4f9a-821e-643ec5529cdf",
+    "checkin": "2026-04-04",
+    "checkout": "2026-04-05"
+  }
+}
