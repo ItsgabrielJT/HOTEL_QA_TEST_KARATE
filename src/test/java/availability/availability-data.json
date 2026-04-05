@@ -1,0 +1,39 @@
+{
+  "baselineRange": {
+    "checkin": "2026-07-10",
+    "checkout": "2026-07-12"
+  },
+  "ddtSearchRange": {
+    "checkin": "2026-07-13",
+    "checkout": "2026-07-15"
+  },
+  "nonOverlapHoldRange": {
+    "checkin": "2026-07-20",
+    "checkout": "2026-07-22"
+  },
+  "fullBlockRange": {
+    "checkin": "2026-07-25",
+    "checkout": "2026-07-26"
+  },
+  "seedConfirmedRange": {
+    "checkin": "2026-04-04",
+    "checkout": "2026-04-05"
+  },
+  "knownAvailableRoom": {
+    "id": "5815336d-f35c-4519-bee4-a32d9e865ed9",
+    "roomNumber": "102",
+    "hotelId": "e2d13a50-bd49-4f9a-821e-643ec5529cdf",
+    "type": "SINGLE",
+    "capacity": 1
+  },
+  "expiredHoldAssumptionRoom": {
+    "id": "15721d79-fd64-480a-8aa2-4f58abc3a806",
+    "roomNumber": "101",
+    "hotelId": "e2d13a50-bd49-4f9a-821e-643ec5529cdf"
+  },
+  "seedConfirmedReservation": {
+    "reservationCode": "0NPLUSYK",
+    "roomNumber": "102",
+    "hotelId": "e2d13a50-bd49-4f9a-821e-643ec5529cdf"
+  }
+}
