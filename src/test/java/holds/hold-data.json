@@ -1,0 +1,31 @@
+{
+  "ttlToleranceSeconds": 10,
+  "primaryRoom": {
+    "id": "179b1dcf-f4e9-4a38-81f4-79b623f9910b",
+    "roomNumber": "202",
+    "hotelId": "e2d13a50-bd49-4f9a-821e-643ec5529cdf",
+    "pricePerNight": 155
+  },
+  "fallbackRoom": {
+    "id": "a76c2ab0-ca82-408c-a33b-173ae72fff32",
+    "roomNumber": "203",
+    "hotelId": "e2d13a50-bd49-4f9a-821e-643ec5529cdf",
+    "pricePerNight": 160
+  },
+  "createRange": {
+    "checkin": "2026-08-10",
+    "checkout": "2026-08-12"
+  },
+  "duplicateRange": {
+    "checkin": "2026-08-13",
+    "checkout": "2026-08-15"
+  },
+  "concurrentRange": {
+    "checkin": "2026-08-16",
+    "checkout": "2026-08-18"
+  },
+  "authRange": {
+    "checkin": "2026-08-19",
+    "checkout": "2026-08-21"
+  }
+}
