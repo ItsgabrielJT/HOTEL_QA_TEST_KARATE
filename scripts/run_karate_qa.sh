@@ -28,6 +28,15 @@ KARATE_EXIT='99'
 ZAP_EXIT='99'
 TARGET_COMMIT=''
 
+# QA_MODE controls which phase(s) this invocation executes:
+#   all     - full lifecycle (default, backward-compatible)
+#   infra   - clone target, start postgres/API, write state file, exit without cleanup
+#   karate  - source state, run Karate suite only
+#   zap     - source state, run OWASP ZAP only
+#   cleanup - source state, collect reports, tear down infrastructure
+QA_MODE="${QA_MODE:-all}"
+STATE_FILE="${ARTIFACTS_DIR}/.qa-state"
+
 log() {
   printf '[db-qa] %s\n' "$*"
 }
@@ -277,8 +286,12 @@ build_pages_index() {
 EOF
 }
 
-cleanup() {
-  local exit_code=$?
+_teardown() {
+  # In split-mode (cleanup phase), load state written by the infra phase.
+  if [[ -z "${COMPOSE_FILE}" && -f "${STATE_FILE:-}" ]]; then
+    # shellcheck source=/dev/null
+    source "${STATE_FILE}" 2>/dev/null || true
+  fi
 
   if [[ -n "${API_PID}" ]] && kill -0 "${API_PID}" >/dev/null 2>&1; then
     kill "${API_PID}" >/dev/null 2>&1 || true
@@ -293,22 +306,38 @@ cleanup() {
   collect_reports || true
   build_pages_index || true
   generate_execution_summary || true
+}
+
+cleanup() {
+  local exit_code=$?
+  _teardown
   exit "${exit_code}"
 }
 
-trap cleanup EXIT
+# Register cleanup trap only in 'all' mode; split-mode callers manage teardown via explicit step.
+[[ "${QA_MODE}" == "all" ]] && trap cleanup EXIT
 
 require_cmd git
 require_cmd docker
 require_cmd curl
 require_cmd node
 require_cmd npm
-require_cmd gradle
+# gradle is only needed for phases that run Karate
+case "${QA_MODE}" in all|karate) require_cmd gradle ;; esac
 
 mkdir -p "${LOGS_DIR}" "${REPORTS_DIR}" "${PIPELINE_DIR}"
+
+# In cleanup mode: load state and tear down; skip all infra setup.
+if [[ "${QA_MODE}" == "cleanup" ]]; then
+  _teardown
+  exit 0
+fi
+
 rm -rf "${TARGET_CLONE_DIR}"
 
 log "Clonando ${TARGET_REPO_URL}#${TARGET_REPO_BRANCH}"
+# [RISK-S3] ADVERTENCIA: se ejecuta codigo del repo objetivo (npm ci/build/seed/node dist/main).
+# Asegurar que TARGET_REPO_URL apunta a un repositorio de confianza antes de ejecutar en produccion.
 git clone --depth 1 --branch "${TARGET_REPO_BRANCH}" "${TARGET_REPO_URL}" "${TARGET_CLONE_DIR}" > "${LOGS_DIR}/git-clone.log" 2>&1
 TARGET_COMMIT="$(git -C "${TARGET_CLONE_DIR}" rev-parse HEAD 2>/dev/null || true)"
 
@@ -337,55 +366,97 @@ popd >/dev/null
 
 wait_for_http "http://127.0.0.1:${QA_API_PORT}/health" 'La API backend'
 
-log 'Ejecutando suite Karate'
-pushd "${ROOT_DIR}" >/dev/null
-export BASE_URL="http://127.0.0.1:${QA_API_PORT}/api/v1"
-set +e
-gradle test --tests availability.AvailabilityRunner | tee "${LOGS_DIR}/gradle-karate.log"
-KARATE_EXIT=${PIPESTATUS[0]}
-set -e
-popd >/dev/null
+# In infra mode: write state file so subsequent phases can find the running services, then exit.
+# Background processes (Docker containers, Node API) survive because they are not children of the
+# current shell step — Docker is daemon-managed, and node was disowned by the shell.
+if [[ "${QA_MODE}" == "infra" ]]; then
+  mkdir -p "$(dirname "${STATE_FILE}")"
+  {
+    printf 'API_PID=%q\n' "${API_PID}"
+    printf 'COMPOSE_FILE=%q\n' "${COMPOSE_FILE}"
+    printf 'TARGET_COMMIT=%q\n' "${TARGET_COMMIT}"
+  } > "${STATE_FILE}"
+  log "Infraestructura lista. Estado guardado en ${STATE_FILE}"
+  exit 0
+fi
+# ─── Karate phase ────────────────────────────────────────────────────────────
+if [[ "${QA_MODE}" == "all" || "${QA_MODE}" == "karate" ]]; then
+  # In karate mode, source state so _teardown has COMPOSE_FILE / TARGET_COMMIT.
+  [[ "${QA_MODE}" == "karate" && -f "${STATE_FILE}" ]] && source "${STATE_FILE}" 2>/dev/null || true
 
-mkdir -p "${ARTIFACTS_DIR}"
-sed "s/__QA_API_PORT__/${QA_API_PORT}/g" "${ROOT_DIR}/qa/zap/openapi.yaml" > "${ARTIFACTS_DIR}/zap-openapi.generated.yaml"
-chmod -R a+rwX "${ARTIFACTS_DIR}"
+  log 'Ejecutando suite Karate completa'
+  pushd "${ROOT_DIR}" >/dev/null
+  export BASE_URL="http://127.0.0.1:${QA_API_PORT}/api/v1"
+  set +e
+  # Para acotar la suite pasar la variable KARATE_FILTER (ej: --tests availability.AvailabilityRunner).
+  gradle test ${KARATE_FILTER:-} | tee "${LOGS_DIR}/gradle-karate.log"
+  KARATE_EXIT=${PIPESTATUS[0]}
+  set -e
+  popd >/dev/null
 
-ZAP_OPENAPI_PATH="${ARTIFACTS_DIR#"${ROOT_DIR}"/}/zap-openapi.generated.yaml"
-ZAP_REPORT_HTML_PATH="${REPORTS_DIR#"${ROOT_DIR}"/}/zap-report.html"
-ZAP_REPORT_MD_PATH="${REPORTS_DIR#"${ROOT_DIR}"/}/zap-report.md"
-ZAP_REPORT_JSON_PATH="${REPORTS_DIR#"${ROOT_DIR}"/}/zap-report.json"
+  if [[ "${QA_MODE}" == "karate" ]]; then
+    # Persist exit code so the cleanup phase can use it in the execution summary.
+    printf 'KARATE_EXIT=%q\n' "${KARATE_EXIT}" >> "${STATE_FILE}"
+    if [[ ${KARATE_EXIT} -ne 0 ]]; then
+      log 'Karate reporto fallos'
+      exit "${KARATE_EXIT}"
+    fi
+    exit 0
+  fi
+fi
 
-log 'Ejecutando OWASP ZAP API scan'
-set +e
-docker run --rm --network=host \
-  -v "${ROOT_DIR}:/zap/wrk:rw" \
-  ghcr.io/zaproxy/zaproxy:stable \
-  zap-api-scan.py \
-  -t "/zap/wrk/${ZAP_OPENAPI_PATH}" \
-  -f openapi \
-  -r "/zap/wrk/${ZAP_REPORT_HTML_PATH}" \
-  -w "/zap/wrk/${ZAP_REPORT_MD_PATH}" \
-  -J "/zap/wrk/${ZAP_REPORT_JSON_PATH}" \
-  -z "-config api.disablekey=true" | tee "${LOGS_DIR}/zap.log"
-ZAP_EXIT=${PIPESTATUS[0]}
-set -e
+# ─── ZAP phase ───────────────────────────────────────────────────────────────
+if [[ "${QA_MODE}" == "all" || "${QA_MODE}" == "zap" ]]; then
+  # In zap mode, source state so _teardown has COMPOSE_FILE / TARGET_COMMIT.
+  [[ "${QA_MODE}" == "zap" && -f "${STATE_FILE}" ]] && source "${STATE_FILE}" 2>/dev/null || true
 
+  mkdir -p "${ARTIFACTS_DIR}"
+  sed "s/__QA_API_PORT__/${QA_API_PORT}/g" "${ROOT_DIR}/qa/zap/openapi.yaml" > "${ARTIFACTS_DIR}/zap-openapi.generated.yaml"
+  # [FIX-S4] Eliminado chmod -R a+rwX: permisos world-writable innecesarios en runner efimero.
+
+  ZAP_OPENAPI_PATH="${ARTIFACTS_DIR#"${ROOT_DIR}"/}/zap-openapi.generated.yaml"
+  ZAP_REPORT_HTML_PATH="${REPORTS_DIR#"${ROOT_DIR}"/}/zap-report.html"
+  ZAP_REPORT_MD_PATH="${REPORTS_DIR#"${ROOT_DIR}"/}/zap-report.md"
+  ZAP_REPORT_JSON_PATH="${REPORTS_DIR#"${ROOT_DIR}"/}/zap-report.json"
+
+  log 'Ejecutando OWASP ZAP API scan'
+  set +e
+  docker run --rm --network=host \
+    -v "${ROOT_DIR}:/zap/wrk:rw" \
+    ghcr.io/zaproxy/zaproxy:stable \
+    zap-api-scan.py \
+    -t "/zap/wrk/${ZAP_OPENAPI_PATH}" \
+    -f openapi \
+    -r "/zap/wrk/${ZAP_REPORT_HTML_PATH}" \
+    -w "/zap/wrk/${ZAP_REPORT_MD_PATH}" \
+    -J "/zap/wrk/${ZAP_REPORT_JSON_PATH}" \
+    -z "-config api.disablekey=true" | tee "${LOGS_DIR}/zap.log"
+  ZAP_EXIT=${PIPESTATUS[0]}
+  set -e
+
+  if [[ "${QA_MODE}" == "zap" ]]; then
+    # Persist exit code so the cleanup phase can use it in the execution summary.
+    printf 'ZAP_EXIT=%q\n' "${ZAP_EXIT}" >> "${STATE_FILE}"
+    case "${ZAP_EXIT}" in
+      0) ;;
+      2) log 'OWASP ZAP termino con advertencias no bloqueantes' ;;
+      1|3) log 'OWASP ZAP reporto hallazgos bloqueantes o error de ejecucion'; exit "${ZAP_EXIT}" ;;
+      *) log "OWASP ZAP devolvio un codigo inesperado: ${ZAP_EXIT}"; exit "${ZAP_EXIT}" ;;
+    esac
+    exit 0
+  fi
+fi
+
+# ─── all-mode combined exit logic ────────────────────────────────────────────
 if [[ ${KARATE_EXIT} -ne 0 ]]; then
   log 'Karate reporto fallos'
 fi
 
 case "${ZAP_EXIT}" in
-  0)
-    ;;
-  1|3)
-    log 'OWASP ZAP reporto hallazgos bloqueantes o error de ejecucion'
-    ;;
-  2)
-    log 'OWASP ZAP termino con advertencias no bloqueantes'
-    ;;
-  *)
-    log "OWASP ZAP devolvio un codigo inesperado: ${ZAP_EXIT}"
-    ;;
+  0) ;;
+  1|3) log 'OWASP ZAP reporto hallazgos bloqueantes o error de ejecucion' ;;
+  2)   log 'OWASP ZAP termino con advertencias no bloqueantes' ;;
+  *)   log "OWASP ZAP devolvio un codigo inesperado: ${ZAP_EXIT}" ;;
 esac
 
 if [[ ${KARATE_EXIT} -ne 0 ]]; then

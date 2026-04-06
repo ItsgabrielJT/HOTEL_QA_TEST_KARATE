@@ -1,8 +1,8 @@
 name: Karate QA
 
+# [FIX-S1] Permisos minimos al nivel del workflow. issues:write solo en el job que lo necesita.
 permissions:
   contents: read
-  issues: write
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
@@ -69,28 +69,44 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Install ShellCheck
-        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Install linting tools
+        # [FIX-M2] Agregar yamllint para validar el propio workflow y otros YAMLs del repo.
+        run: sudo apt-get update && sudo apt-get install -y shellcheck yamllint
 
       - name: Validate shell scripts
         run: |
           bash -n scripts/run_karate_qa.sh
           shellcheck scripts/run_karate_qa.sh
 
-  api-service-qa:
-    name: API Service QA
+      - name: Validate workflow YAML
+        # [FIX-M2] Detectar errores de sintaxis YAML antes de que fallen los jobs.
+        run: yamllint -d relaxed .github/workflows/karate-qa.yml
+
+      - name: Validate OpenAPI spec
+        # [FIX-M2] Verificar que el spec usado por ZAP sea OpenAPI valido.
+        run: |
+          npx --yes @redocly/cli lint qa/zap/openapi.yaml --format=stylish || true
+
+  # ── Job 2: Karate Tests ────────────────────────────────────────────────────
+  # Levanta su propia infra (postgres + API), hace health check visible como step
+  # dedicado, ejecuta toda la suite Karate y limpia al finalizar.
+  karate-tests:
+    name: Karate Tests
     needs: lint
     runs-on: ubuntu-22.04
-    timeout-minutes: 35
+    timeout-minutes: 30
+    permissions:
+      contents: read
     env:
-      COMPOSE_PROJECT_NAME: hotel-qa-${{ github.run_id }}
+      COMPOSE_PROJECT_NAME: hotel-karate-${{ github.run_id }}
       TARGET_REPO_URL: ${{ inputs.target_repo_url || vars.DB_QA_TARGET_REPO_URL }}
       TARGET_REPO_BRANCH: ${{ inputs.target_repo_branch || vars.DB_QA_TARGET_REPO_BRANCH }}
       QA_DB_PORT: ${{ inputs.qa_db_port || vars.DB_QA_DB_PORT }}
       QA_API_PORT: ${{ inputs.qa_api_port || vars.DB_QA_API_PORT }}
-      DB_QA_FAILURE_ISSUES_ENABLED: ${{ inputs.failure_issues_enabled || vars.DB_QA_FAILURE_ISSUES_ENABLED }}
-      QA_ARTIFACTS_DIR: ${{ github.workspace }}/qa-artifacts/latest
+      QA_ARTIFACTS_DIR: ${{ github.workspace }}/qa-artifacts/karate
       TARGET_CLONE_DIR: ${{ github.workspace }}/target-under-test
+      # [FIX-C3] Gradle daemon innecesario en runners efimeros.
+      GRADLE_OPTS: "-Dorg.gradle.daemon=false"
 
     steps:
       - name: Checkout repository
@@ -113,62 +129,257 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Run Karate and ZAP against target branch
-        timeout-minutes: 25
-        run: bash scripts/run_karate_qa.sh
+      # Cache npm del repo objetivo. La key incluye URL+rama; subsiguientes runs con la
+      # misma rama reutilizan las dependencias descargadas en ~/.npm por npm ci.
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ env.TARGET_REPO_URL }}-${{ env.TARGET_REPO_BRANCH }}
+          restore-keys: |
+            npm-${{ env.TARGET_REPO_URL }}-
 
-      - name: Upload QA artifacts
+      - name: Validate workflow_dispatch inputs
+        # [FIX-S5] Rechazar valores de puerto no numericos antes de que lleguen al sed del script.
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          if [[ -n "$QA_API_PORT" && ! "$QA_API_PORT" =~ ^[0-9]{2,5}$ ]]; then
+            echo "::error::qa_api_port debe ser un numero de puerto valido (2-5 digitos): '$QA_API_PORT'"
+            exit 1
+          fi
+          if [[ -n "$QA_DB_PORT" && ! "$QA_DB_PORT" =~ ^[0-9]{2,5}$ ]]; then
+            echo "::error::qa_db_port debe ser un numero de puerto valido (2-5 digitos): '$QA_DB_PORT'"
+            exit 1
+          fi
+
+      - name: Start infrastructure (DB + API)
+        # Clona el repo objetivo, levanta PostgreSQL via Docker Compose, instala
+        # dependencias Node, ejecuta seed/build y arranca la API en background.
+        run: bash scripts/run_karate_qa.sh
+        env:
+          QA_MODE: infra
+
+      - name: Health check
+        # Valida explicitamente que la API responde antes de lanzar los tests.
+        # Evita falsos negativos por condiciones de carrera en el arranque.
+        run: |
+          echo "Esperando respuesta de la API en http://127.0.0.1:${QA_API_PORT}/health ..."
+          until curl --fail --silent --show-error --max-time 5 \
+                "http://127.0.0.1:${QA_API_PORT}/health"; do
+            sleep 3
+          done
+          echo "API lista y respondiendo."
+
+      - name: Run Karate tests
+        run: bash scripts/run_karate_qa.sh
+        env:
+          QA_MODE: karate
+
+      - name: Publish execution summary
+        if: always()
+        run: |
+          SUMMARY_FILE="qa-artifacts/karate/reports/execution-summary.md"
+          if [[ -f "${SUMMARY_FILE}" ]]; then
+            cat "${SUMMARY_FILE}" >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "### Karate Tests" >> "${GITHUB_STEP_SUMMARY}"
+            echo "Resumen no generado (el script puede haber fallado antes de completar)." >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: Upload Karate artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: karate-qa-artifacts-${{ github.run_id }}
-          path: qa-artifacts/latest
+          name: karate-artifacts-${{ github.run_id }}
+          path: qa-artifacts/karate
           if-no-files-found: warn
+          # [FIX-C4] 14 dias evita acumulacion excessiva con schedule c/6h.
+          retention-days: 14
+
+      - name: Teardown infrastructure
+        if: always()
+        # Mata la API, baja Docker Compose y recolecta reportes finales.
+        run: bash scripts/run_karate_qa.sh
+        env:
+          QA_MODE: cleanup
+          QA_ARTIFACTS_DIR: ${{ github.workspace }}/qa-artifacts/karate
+
+  # ── Job 3: OWASP ZAP Scan ─────────────────────────────────────────────────
+  # Levanta su PROPIA infra en paralelo con karate-tests (runner independiente),
+  # hace health check y ejecuta el scan DAST. No requiere Java.
+  zap-scan:
+    name: OWASP ZAP Scan
+    needs: lint
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      COMPOSE_PROJECT_NAME: hotel-zap-${{ github.run_id }}
+      TARGET_REPO_URL: ${{ inputs.target_repo_url || vars.DB_QA_TARGET_REPO_URL }}
+      TARGET_REPO_BRANCH: ${{ inputs.target_repo_branch || vars.DB_QA_TARGET_REPO_BRANCH }}
+      QA_DB_PORT: ${{ inputs.qa_db_port || vars.DB_QA_DB_PORT }}
+      QA_API_PORT: ${{ inputs.qa_api_port || vars.DB_QA_API_PORT }}
+      QA_ARTIFACTS_DIR: ${{ github.workspace }}/qa-artifacts/zap
+      TARGET_CLONE_DIR: ${{ github.workspace }}/target-under-test
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # ZAP scan no requiere Java/Gradle: setup mas ligero que karate-tests.
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ env.TARGET_REPO_URL }}-${{ env.TARGET_REPO_BRANCH }}
+          restore-keys: |
+            npm-${{ env.TARGET_REPO_URL }}-
+
+      - name: Validate workflow_dispatch inputs
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          if [[ -n "$QA_API_PORT" && ! "$QA_API_PORT" =~ ^[0-9]{2,5}$ ]]; then
+            echo "::error::qa_api_port debe ser un numero de puerto valido (2-5 digitos): '$QA_API_PORT'"
+            exit 1
+          fi
+          if [[ -n "$QA_DB_PORT" && ! "$QA_DB_PORT" =~ ^[0-9]{2,5}$ ]]; then
+            echo "::error::qa_db_port debe ser un numero de puerto valido (2-5 digitos): '$QA_DB_PORT'"
+            exit 1
+          fi
+
+      - name: Start infrastructure (DB + API)
+        run: bash scripts/run_karate_qa.sh
+        env:
+          QA_MODE: infra
+
+      - name: Health check
+        run: |
+          echo "Esperando respuesta de la API en http://127.0.0.1:${QA_API_PORT}/health ..."
+          until curl --fail --silent --show-error --max-time 5 \
+                "http://127.0.0.1:${QA_API_PORT}/health"; do
+            sleep 3
+          done
+          echo "API lista y respondiendo."
+
+      - name: Run OWASP ZAP scan
+        run: bash scripts/run_karate_qa.sh
+        env:
+          QA_MODE: zap
+
+      - name: Upload ZAP artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-artifacts-${{ github.run_id }}
+          path: qa-artifacts/zap
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Teardown infrastructure
+        if: always()
+        run: bash scripts/run_karate_qa.sh
+        env:
+          QA_MODE: cleanup
+          QA_ARTIFACTS_DIR: ${{ github.workspace }}/qa-artifacts/zap
+
+  # ── Job 4: Publish Report & Notify ────────────────────────────────────────
+  # Descarga artefactos de ambos jobs, publica Pages, gestiona issues de fallo.
+  publish-and-notify:
+    name: Publish Report & Notify
+    needs: [karate-tests, zap-scan]
+    if: >-
+      always() &&
+      github.event_name != 'pull_request' &&
+      (
+        needs.karate-tests.result == 'success' || needs.karate-tests.result == 'failure' ||
+        needs.zap-scan.result   == 'success' || needs.zap-scan.result   == 'failure'
+      )
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+      pages: write
+      id-token: write
+    env:
+      TARGET_REPO_URL: ${{ inputs.target_repo_url || vars.DB_QA_TARGET_REPO_URL }}
+      TARGET_REPO_BRANCH: ${{ inputs.target_repo_branch || vars.DB_QA_TARGET_REPO_BRANCH }}
+      DB_QA_FAILURE_ISSUES_ENABLED: ${{ inputs.failure_issues_enabled || vars.DB_QA_FAILURE_ISSUES_ENABLED }}
+    environment:
+      name: karate-qa-report
+      url: ${{ steps.deploy-pages.outputs.page_url }}
+
+    steps:
+      - name: Download Karate artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: karate-artifacts-${{ github.run_id }}
+          path: downloaded-artifacts/karate
+
+      - name: Download ZAP artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: zap-artifacts-${{ github.run_id }}
+          path: downloaded-artifacts/zap
 
       - name: Build failure issue body
-        if: failure() && env.DB_QA_FAILURE_ISSUES_ENABLED == 'true'
+        if: >-
+          (needs.karate-tests.result == 'failure' || needs.zap-scan.result == 'failure') &&
+          env.DB_QA_FAILURE_ISSUES_ENABLED == 'true'
         run: |
-          mkdir -p qa-artifacts/latest
+          mkdir -p qa-artifacts/merged
           {
             echo "# Karate QA failure"
             echo
             echo "- Target repo: ${TARGET_REPO_URL}"
             echo "- Target branch: ${TARGET_REPO_BRANCH}"
             echo "- Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-            echo "- Commit under test: ${GITHUB_SHA}"
+            echo "- Karate job: ${{ needs.karate-tests.result }}"
+            echo "- ZAP job: ${{ needs.zap-scan.result }}"
             echo
             echo "## Karate log tail"
             echo '```text'
-            tail -n 60 qa-artifacts/latest/logs/gradle-karate.log 2>/dev/null || echo "Karate log unavailable"
+            tail -n 60 downloaded-artifacts/karate/logs/gradle-karate.log 2>/dev/null || echo "Karate log unavailable"
             echo '```'
             echo
             echo "## ZAP findings tail"
             echo '```text'
-            grep -E 'WARN-NEW|FAIL-NEW|FAIL-INPROG|ERROR|Permission denied|ZAP reporto|Karate reporto' qa-artifacts/latest/logs/zap.log 2>/dev/null | tail -n 80 || echo "ZAP findings unavailable"
+            grep -E 'WARN-NEW|FAIL-NEW|FAIL-INPROG|ERROR|Permission denied' \
+              downloaded-artifacts/zap/logs/zap.log 2>/dev/null | tail -n 80 || echo "ZAP findings unavailable"
             echo '```'
             echo
-            if [ -f qa-artifacts/latest/reports/zap-report.md ]; then
+            if [ -f downloaded-artifacts/zap/reports/zap-report.md ]; then
               echo "## ZAP summary"
-              sed -n '1,120p' qa-artifacts/latest/reports/zap-report.md
+              sed -n '1,120p' downloaded-artifacts/zap/reports/zap-report.md
               echo
             fi
             echo "## Backend log tail"
             echo '```text'
-            tail -n 40 qa-artifacts/latest/logs/backend.log 2>/dev/null || echo "Backend log unavailable"
+            tail -n 40 downloaded-artifacts/karate/logs/backend.log 2>/dev/null || echo "Backend log unavailable"
             echo '```'
-          } > qa-artifacts/latest/issue-body.md
+          } > qa-artifacts/merged/issue-body.md
 
           ISSUE_BODY_MAX_CHARS=60000
-          ISSUE_BODY_SIZE=$(wc -c < qa-artifacts/latest/issue-body.md | tr -d ' ')
+          ISSUE_BODY_SIZE=$(wc -c < qa-artifacts/merged/issue-body.md | tr -d ' ')
           if [ "${ISSUE_BODY_SIZE}" -gt "${ISSUE_BODY_MAX_CHARS}" ]; then
             tmp_file=$(mktemp)
-            head -c "${ISSUE_BODY_MAX_CHARS}" qa-artifacts/latest/issue-body.md > "${tmp_file}"
+            head -c "${ISSUE_BODY_MAX_CHARS}" qa-artifacts/merged/issue-body.md > "${tmp_file}"
             printf '\n\n[contenido truncado automaticamente por limite de GitHub Issues]\n' >> "${tmp_file}"
-            mv "${tmp_file}" qa-artifacts/latest/issue-body.md
+            mv "${tmp_file}" qa-artifacts/merged/issue-body.md
           fi
 
       - name: Create or update failure issue
-        if: failure() && env.DB_QA_FAILURE_ISSUES_ENABLED == 'true'
+        if: >-
+          (needs.karate-tests.result == 'failure' || needs.zap-scan.result == 'failure') &&
+          env.DB_QA_FAILURE_ISSUES_ENABLED == 'true'
         uses: actions/github-script@v7
         with:
           script: |
@@ -177,7 +388,7 @@ jobs:
             const repo = context.repo.repo;
             const title = `Karate QA failure: ${process.env.TARGET_REPO_BRANCH} @ ${process.env.TARGET_REPO_URL}`;
             const maxBodyLength = 60000;
-            const rawBody = fs.readFileSync('qa-artifacts/latest/issue-body.md', 'utf8');
+            const rawBody = fs.readFileSync('qa-artifacts/merged/issue-body.md', 'utf8');
             const body = rawBody.length > maxBodyLength
               ? `${rawBody.slice(0, maxBodyLength)}\n\n[contenido truncado automaticamente por limite de GitHub Issues]`
               : rawBody;
@@ -187,9 +398,7 @@ jobs:
               try {
                 await github.rest.issues.createLabel({ owner, repo, name });
               } catch (error) {
-                if (error.status !== 422) {
-                  throw error;
-                }
+                if (error.status !== 422) throw error;
               }
             }
 
@@ -212,7 +421,10 @@ jobs:
             }
 
       - name: Resolve open failure issue on success
-        if: success() && env.DB_QA_FAILURE_ISSUES_ENABLED == 'true'
+        if: >-
+          needs.karate-tests.result == 'success' &&
+          needs.zap-scan.result == 'success' &&
+          env.DB_QA_FAILURE_ISSUES_ENABLED == 'true'
         uses: actions/github-script@v7
         with:
           script: |
@@ -228,6 +440,7 @@ jobs:
               '',
               'Karate y ZAP volvieron a pasar. Se cierra el issue automaticamente.',
             ].join('\n');
+
             const search = await github.rest.search.issuesAndPullRequests({
               q: `repo:${owner}/${repo} is:issue is:open in:title "${title}"`,
               per_page: 1,
@@ -242,35 +455,22 @@ jobs:
               core.info('No open failure issue to close');
             }
 
-  publish-karate-report:
-    needs: api-service-qa
-    if: always() && github.event_name != 'pull_request' && (needs.api-service-qa.result == 'success' || needs.api-service-qa.result == 'failure')
-    runs-on: ubuntu-22.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
-    environment:
-      name: karate-qa-report
-      url: ${{ steps.deploy-pages.outputs.page_url }}
-
-    steps:
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
-
-      - name: Download QA artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: karate-qa-artifacts-${{ github.run_id }}
-          path: downloaded-artifacts
 
       - name: Prepare GitHub Pages content
         run: |
           mkdir -p pages-site
-          if [ -d downloaded-artifacts/reports/karate-pages ]; then
-            cp -R downloaded-artifacts/reports/karate-pages/. pages-site/
-          else
+          # Contenido Karate (reporte principal)
+          if [ -d downloaded-artifacts/karate/reports/karate-pages ]; then
+            cp -R downloaded-artifacts/karate/reports/karate-pages/. pages-site/
+          fi
+          # Contenido ZAP (reportes de seguridad)
+          mkdir -p pages-site/security
+          cp -p downloaded-artifacts/zap/reports/zap-report.html pages-site/security/ 2>/dev/null || true
+          cp -p downloaded-artifacts/zap/reports/zap-report.md   pages-site/security/ 2>/dev/null || true
+          # Fallback index si el reporte nativo de Karate no se genero
+          if [ ! -f pages-site/index.html ]; then
             cat > pages-site/index.html <<'EOF'
           <!doctype html>
           <html lang="es">
@@ -280,7 +480,7 @@ jobs:
               <meta http-equiv="Pragma" content="no-cache" />
               <meta http-equiv="Expires" content="0" />
               <meta name="viewport" content="width=device-width, initial-scale=1" />
-              <title>Karate QA sin reporte Karate</title>
+              <title>Karate QA</title>
               <style>
                 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #1f2937; }
                 main { max-width: 56rem; }
@@ -289,15 +489,14 @@ jobs:
             <body>
               <main>
                 <h1>Karate QA</h1>
-                <p>La ejecucion actual no genero el reporte nativo de Karate esperado.</p>
-                <p>Estado del job api-service-qa: <strong>${{ needs.api-service-qa.result }}</strong></p>
-                <p>Run actual: <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">${{ github.run_id }}</a></p>
+                <p>La ejecucion no genero el reporte nativo de Karate esperado.</p>
+                <p>Karate: <strong>${{ needs.karate-tests.result }}</strong> | ZAP: <strong>${{ needs.zap-scan.result }}</strong></p>
+                <p>Run: <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">${{ github.run_id }}</a></p>
               </main>
             </body>
           </html>
           EOF
           fi
-
           touch pages-site/.nojekyll
 
       - name: Upload Pages artifact
