@@ -1,147 +1,292 @@
-# Travel Hotel API Tests with Karate
+# Pruebas API con Karate - Travel Hotel: Motor de Reservas
 
-Suite de pruebas API automatizadas con Karate sobre el motor de reservas de Travel Hotel.
+**Proyecto:** Travel Hotel - Motor de Reservas  
+**Version:** 1.0.0  
+**Fecha:** 2026-04-05  
+**Autor:** Joel Tates (QA)  
+**HUs en Alcance:** HU2, HU3, HU5, HU6, HU7, HU11  
+**Total de Casos:** 24 identificados (14 activos, 3 ignorados, 7 fuera de alcance)
 
-El proyecto está construido con Gradle y organizado por dominio de negocio para mantener trazabilidad directa entre los casos de prueba.
+## Contexto
+
+Este repositorio contiene un harness externo de QA para validar el contrato observable de la API de Travel Hotel sin mezclar la suite dentro del backend objetivo.
+
+La automatizacion esta construida con Gradle, Karate y JUnit 5, y se organiza por dominio de negocio para mantener trazabilidad directa entre historias de usuario, casos de prueba y artefactos de ejecucion.
+
+## Objetivo
+
+- Validar los flujos criticos del motor de reservas expuestos por la API.
+- Ejecutar pruebas funcionales end-to-end sobre disponibilidad, holds, pagos, reservas y validacion de fechas.
+- Permitir corrida local contra una API ya levantada y corrida CI contra un checkout remoto del sistema bajo prueba.
+- Generar artefactos consumibles para diagnostico, trazabilidad y publicacion de reportes.
+- Complementar la validacion funcional con una pasada automatizada de OWASP ZAP en CI.
 
 ## Alcance
 
-Historias en alcance:
+Historias actualmente cubiertas por la suite:
 
-- HU2: disponibilidad
-- HU3: hold de checkout
+- HU2: disponibilidad de habitaciones
+- HU3: hold temporal para checkout
 - HU5: idempotencia de pagos
-- HU6: confirmación de reserva
-- HU7: liberación por fallo de pago
-- HU11: validación de fechas
+- HU6: confirmacion de reserva
+- HU7: liberacion por fallo de pago
+- HU11: validacion de fechas
 
+Cobertura activa en la suite por defecto:
 
-## Fuera de alcance
+- HU2: TC-HU2-01, TC-HU2-02, TC-HU2-03, TC-HU2-05, TC-HU2-07
+- HU3: TC-HU3-01, TC-HU3-03
+- HU5: TC-HU5-01
+- HU6: TC-HU6-01, TC-HU6-02
+- HU7: sin caso activo en la suite por defecto
+- HU11: TC-HU11-01, TC-HU11-02, TC-HU11-03, TC-HU11-04
 
-Estos casos quedaron fuera de esta suite porque hoy no son verificables de forma confiable con el contrato observable o requieren capacidades no expuestas por la API actual.
+## Fuera del alcance
+
+Estos casos no estan activos porque hoy no son verificables de forma confiable con el contrato expuesto o requieren capacidades que la API actual no publica.
 
 | Caso | Estado | Motivo |
 |---|---|---|
-| TC-HU3-02 | No activo | La prueba de concurrencia no es estable de forma end-to-end con el contrato actual y puede depender de timing interno del backend. |
-| TC-HU5-02 | No activo | El backend observado no preserva de forma estable el mismo rechazo al reintentar con la misma idempotency key, por lo que la expectativa funcional no es verificable de forma confiable. |
-| TC-HU5-04 | No activo | El backend observado reutiliza el resultado cacheado y no rechaza la llave cross-hold como espera la matriz. |
-| TC-HU7-02 | No activo | Requiere reprocesar eventos tardíos sobre una reserva ya confirmada con control explícito del flujo de eventos. |
-| TC-HU8-01 a TC-HU8-04 | No activo | La API no expone endpoint, hook o control de tiempo para disparar y verificar el worker de expiración de forma automatizable desde Karate. |
+| TC-HU3-02 | No implementado | La concurrencia end-to-end no es estable con el contrato observable actual. |
+| TC-HU5-04 | No implementado | El backend observado reutiliza el resultado cacheado y no rechaza la llave cross-hold como espera la matriz. |
+| TC-HU7-02 | No implementado | Requiere reprocesar eventos tardios sobre una reserva ya confirmada con control explicito del flujo de eventos. |
+| TC-HU8-01 | No implementado | La API no expone endpoint, hook o control de tiempo para disparar el worker de expiracion. |
+| TC-HU8-02 | No implementado | La API no expone endpoint, hook o control de tiempo para disparar el worker de expiracion. |
+| TC-HU8-03 | No implementado | La API no expone endpoint, hook o control de tiempo para disparar el worker de expiracion. |
+| TC-HU8-04 | No implementado | La API no expone endpoint, hook o control de tiempo para disparar el worker de expiracion. |
 
-## Estructura
+## Casos de prueba generados y sus estados
 
-- [build.gradle](build.gradle): configuración Gradle y dependencias Karate/JUnit 5
-- [settings.gradle](settings.gradle): nombre del proyecto
-- [src/test/java/karate-config.js](src/test/java/karate-config.js): configuración global de Karate
-- [src/test/java/TestRunner.java](src/test/java/TestRunner.java): ejecuta todo lo no marcado con `@ignore`
-- [src/test/java/common/api-helpers.feature](src/test/java/common/api-helpers.feature): helpers compartidos para endpoints
-- [src/test/java/common/workflows.js](src/test/java/common/workflows.js): workflows reutilizables para rangos, seleccion de habitaciones y cadenas de pago
-- [src/test/java/common/validators.js](src/test/java/common/validators.js): validadores reutilizables
-- [src/test/java/availability/rooms-availability.feature](src/test/java/availability/rooms-availability.feature): HU2
-- [src/test/java/holds/room-hold.feature](src/test/java/holds/room-hold.feature): HU3
-- [src/test/java/payments/payment-idempotency.feature](src/test/java/payments/payment-idempotency.feature): HU5
-- [src/test/java/reservations/reservation-lifecycle.feature](src/test/java/reservations/reservation-lifecycle.feature): HU6 y HU7
-- [src/test/java/validation/date-validation.feature](src/test/java/validation/date-validation.feature): HU11
+Estado de cobertura del repositorio:
 
-## Prerrequisitos
+| TC-ID | HU | Estado | Implementacion | Observacion |
+|---|---|---|---|---|
+| TC-HU2-01 | HU2 | Activo | Implementado | Caso happy path de disponibilidad sembrada. |
+| TC-HU2-02 | HU2 | Activo | Implementado | Valida que un hold no solapado no afecte disponibilidad. |
+| TC-HU2-03 | HU2 | Activo | Implementado | Solapamiento exacto via DDT. |
+| TC-HU2-04 | HU2 | Ignorado | Implementado con `@ignore` | Depende de una reserva confirmada seed consistente. |
+| TC-HU2-05 | HU2 | Activo | Implementado | Solapamiento parcial via DDT. |
+| TC-HU2-06 | HU2 | Ignorado | Implementado con `@ignore` | Requiere esperar expiracion del hold y hoy no se ejecuta en suite por defecto. |
+| TC-HU2-07 | HU2 | Activo | Implementado | Bloqueo masivo de habitaciones disponibles para retorno vacio. |
+| TC-HU3-01 | HU3 | Activo | Implementado | Crea hold pendiente y valida TTL de 10 minutos. |
+| TC-HU3-02 | HU3 | No implementado | Sin feature dedicado | Caso fuera de alcance actual por estabilidad de concurrencia. |
+| TC-HU3-03 | HU3 | Activo | Implementado | Rechazo de segundo hold para mismas fechas. |
+| TC-HU5-01 | HU5 | Activo | Implementado | Reintento exitoso con misma idempotency key y respuesta cacheada. |
+| TC-HU5-02 | HU5 | Ignorado | Implementado con `@ignore` | Se mantiene como gap de contrato observado. |
+| TC-HU5-04 | HU5 | No implementado | Sin feature dedicado | El backend no rechaza hoy la llave cross-hold como exige la matriz. |
+| TC-HU6-01 | HU6 | Activo | Implementado | Confirmacion de reserva tras pago exitoso. |
+| TC-HU6-02 | HU6 | Activo | Implementado | No confirma reserva ante pago rechazado. |
+| TC-HU7-02 | HU7 | No implementado | Sin feature dedicado | Requiere manejo de eventos tardios no observable por API. |
+| TC-HU8-01 | HU8 | No implementado | Sin feature dedicado | Worker de expiracion no automatizable desde Karate hoy. |
+| TC-HU8-02 | HU8 | No implementado | Sin feature dedicado | Worker de expiracion no automatizable desde Karate hoy. |
+| TC-HU8-03 | HU8 | No implementado | Sin feature dedicado | Worker de expiracion no automatizable desde Karate hoy. |
+| TC-HU8-04 | HU8 | No implementado | Sin feature dedicado | Worker de expiracion no automatizable desde Karate hoy. |
+| TC-HU11-01 | HU11 | Activo | Implementado | Checkout anterior al checkin. |
+| TC-HU11-02 | HU11 | Activo | Implementado | Checkout igual al checkin. |
+| TC-HU11-03 | HU11 | Activo | Implementado | Checkin en el pasado. |
+| TC-HU11-04 | HU11 | Activo | Implementado | Rango valido y continuidad al hold. |
 
-Para ejecutar la suite localmente necesitas:
+Notas sobre estado observable:
 
-1. Java 17 disponible en la máquina.
+- Los tags `@ignore` quedan excluidos por el runner global.
+- Los artefactos presentes en `target` muestran corridas parciales y corridas historicas; por eso esta tabla documenta el estado del codigo fuente, no solo una unica corrida cacheada.
+- En los artefactos actuales existe evidencia de una corrida parcial de disponibilidad con 6 escenarios pasados.
+
+## CI
+
+El workflow principal esta en `.github/workflows/karate-qa.yml` y cubre tres modos de disparo:
+
+- Manual con `workflow_dispatch`.
+- Programado cada 6 horas.
+- Automatico en `push` y `pull_request` hacia `main` cuando cambian archivos relevantes de la suite.
+
+El pipeline se divide en tres jobs:
+
+1. `lint`
+   - Ejecuta `bash -n` y `shellcheck` sobre `scripts/run_karate_qa.sh`.
+2. `api-service-qa`
+   - Configura Java 17, Gradle y Node.js 20.
+   - Clona el repositorio objetivo y la rama objetivo.
+   - Levanta Docker Compose desde el checkout remoto.
+   - Arranca el backend bajo prueba.
+   - Ejecuta Karate y OWASP ZAP.
+   - Publica `qa-artifacts/latest` como artefacto de GitHub Actions.
+   - Puede crear o actualizar un issue automatico cuando falla la suite.
+   - Si una corrida posterior recupera el estado, comenta y cierra el issue automaticamente.
+3. `publish-karate-report`
+   - Corre fuera de `pull_request`.
+   - Descarga artefactos y publica el sitio en GitHub Pages.
+   - Si no existe el reporte esperado, publica una pagina de estado del run actual en lugar de dejar un reporte viejo.
+
+La corrida manual acepta inputs, pero esos inputs solo funcionan como override de las variables configuradas en el repositorio.
+
+## Variables del repositorio
+
+Variables de GitHub Actions consumidas por CI:
+
+- `DB_QA_TARGET_REPO_URL`
+- `DB_QA_TARGET_REPO_BRANCH`
+- `DB_QA_DB_PORT`
+- `DB_QA_API_PORT`
+- `DB_QA_FAILURE_ISSUES_ENABLED`
+
+Para configurar esas variables automaticamente con GitHub CLI:
+
+```bash
+bash scripts/configure_github_repo.sh
+```
+
+## Ejecucion local
+
+Hay dos formas de correr esta automatizacion localmente.
+
+### Modo 1: suite Karate contra una API ya levantada
+
+Prerrequisitos:
+
+1. Java 17 disponible en la maquina.
 2. Gradle disponible en PATH.
 3. La API de Travel Hotel levantada localmente en `http://localhost:5173`.
 4. Seeder de datos ya ejecutado en el backend.
 
-## Documentacion de API
-
-El repo incluye una referencia funcional de la API y archivos listos para Postman:
-
-- [docs/API_REFERENCE.md](docs/API_REFERENCE.md): documentacion de endpoints, payloads, respuestas y flujo recomendado.
-- [postman/Travel-Hotel-API.postman_collection.json](postman/Travel-Hotel-API.postman_collection.json): coleccion importable en Postman.
-- [postman/Travel-Hotel-Local.postman_environment.json](postman/Travel-Hotel-Local.postman_environment.json): environment local con variables base.
-
-Para probar la API manualmente en Postman:
-
-1. Importa la coleccion y el environment.
-2. Selecciona `Travel Hotel Local` como environment activo.
-3. Ejecuta `List Available Rooms` para poblar `roomId` y `amount` automaticamente.
-4. Ejecuta `Create Hold` para poblar `holdId`.
-5. Ejecuta `Create Payment` y luego las consultas de reserva.
-
-## Ejecución local
-
-Ejecutar toda la suite activa:
+Comandos utiles:
 
 ```bash
 gradle testClasses
 ```
 
-Ejecutar solo disponibilidad:
-
 ```bash
 gradle test --tests availability.AvailabilityRunner
 ```
-
-Ejecutar solo holds:
 
 ```bash
 gradle test --tests holds.HoldsRunner
 ```
 
-Ejecutar solo validación de fechas:
+```bash
+gradle test --tests payments.PaymentsRunner
+```
+
+```bash
+gradle test --tests reservations.ReservationsRunner
+```
 
 ```bash
 gradle test --tests validation.ValidationRunner
 ```
 
-Ejecutar el paquete estable validado en local:
-
 ```bash
 gradle test --tests availability.AvailabilityRunner --tests holds.HoldsRunner --tests validation.ValidationRunner
 ```
-
-Ejecutar con ambiente Karate explícito:
 
 ```bash
 gradle test -Dkarate.env=local
 ```
 
-Si en el futuro el backend exige autenticación real, puedes inyectar token así:
-
 ```bash
 gradle test -Dauth.token=tu_token -Dauth.enforced=true
 ```
 
+Variables relevantes en este modo:
+
+- `karate.env`
+- `base.url` o `baseUrl`
+- `auth.token`
+- `auth.enforced`
+- `worker.enabled`
+- `karate.timeout`
+
+### Modo 2: harness completo contra un checkout remoto
+
+Prerrequisitos adicionales:
+
+1. Docker y Docker Compose disponibles.
+2. Git disponible.
+3. Node.js disponible para arrancar el backend objetivo.
+
+Ejecucion:
+
+```bash
+bash scripts/run_karate_qa.sh
+```
+
+Variables soportadas por el script:
+
+- `TARGET_REPO_URL`
+- `TARGET_REPO_BRANCH`
+- `QA_DB_PORT`
+- `QA_API_PORT`
+- `QA_ARTIFACTS_DIR`
+- `TARGET_CLONE_DIR`
+- `DB_USER`
+- `DB_PASSWORD`
+- `DB_NAME`
+- `HOLD_DURATION_MINUTES`
+- `PAYMENT_SIMULATOR_DECLINE_RATE`
+
+Defaults relevantes del harness:
+
+- `TARGET_REPO_URL=https://github.com/EGgames/HOTEL-MVP.git`
+- `TARGET_REPO_BRANCH=dev`
+- `QA_DB_PORT=5540`
+- `QA_API_PORT=3100`
+
+## Estructura del proyecto
+
+- `build.gradle`: dependencias, task `test`, reportes y propagacion de propiedades Karate.
+- `settings.gradle`: nombre del proyecto.
+- `src/test/java/karate-config.js`: configuracion global de ambientes y timeouts.
+- `src/test/java/TestRunner.java`: runner global que excluye `@ignore` y ejecuta en paralelo.
+- `src/test/java/availability/`: cobertura HU2.
+- `src/test/java/holds/`: cobertura HU3.
+- `src/test/java/payments/`: cobertura HU5.
+- `src/test/java/reservations/`: cobertura HU6 y comportamiento asociado a HU7.
+- `src/test/java/validation/`: cobertura HU11.
+- `src/test/java/common/api-helpers.feature`: llamadas reutilizables a endpoints.
+- `src/test/java/common/workflows.js`: workflows compartidos para rangos, seleccion de habitaciones y cadenas de pago.
+- `src/test/java/common/validators.js`: validadores reutilizables.
+- `docs/API_REFERENCE.md`: referencia funcional de endpoints y payloads.
+- `postman/`: coleccion y environment listos para pruebas manuales.
+- `qa/zap/openapi.yaml`: insumo OpenAPI para el escaneo de ZAP.
+- `scripts/run_karate_qa.sh`: orquestacion completa para CI y ejecucion externa.
+- `scripts/configure_github_repo.sh`: configuracion automatica de variables de repositorio.
+
 ## Reportes
 
-Los reportes generados quedan en:
+Reportes de la corrida Gradle/Karate:
 
-- [target/karate-reports](target/karate-reports): reporte HTML de Karate
-- [target/surefire-reports](target/surefire-reports): XML tipo JUnit
-- [target/gradle-test-report](target/gradle-test-report): reporte HTML de Gradle
+- `target/karate-reports/karate-reports`: HTML, timeline, tags y JSON de Karate.
+- `target/surefire-reports`: XML tipo JUnit.
+- `target/gradle-test-report`: reporte HTML de Gradle.
 
-## Casos automatizados
+Artefactos del harness completo:
 
-Casos activos en el suite por defecto, es decir, ejecutados por [src/test/java/TestRunner.java](src/test/java/TestRunner.java):
+- `qa-artifacts/latest/logs`: logs de clonacion, backend, Gradle y ZAP.
+- `qa-artifacts/latest/reports/karate-report`: copia del reporte HTML de Karate.
+- `qa-artifacts/latest/reports/gradle-report`: copia del reporte HTML de Gradle.
+- `qa-artifacts/latest/reports/surefire-reports`: XML JUnit.
+- `qa-artifacts/latest/reports/karate-pages`: contenido preparado para GitHub Pages.
+- `qa-artifacts/latest/pipeline/execution-summary.json`: resumen estructurado de salida.
 
-| HU | Casos automatizados |
-|---|---|
-| HU2 | TC-HU2-01, TC-HU2-02, TC-HU2-03, TC-HU2-05, TC-HU2-07 |
-| HU3 | TC-HU3-01, TC-HU3-03 |
-| HU5 | TC-HU5-01 |
-| HU6 | TC-HU6-01, TC-HU6-02 |
-| HU7 | Sin casos activos en el suite por defecto |
-| HU11 | TC-HU11-01, TC-HU11-02, TC-HU11-03, TC-HU11-04 |
+## Notas
 
-Notas de implementación:
+- Se aplica DDT donde reduce repeticion, especialmente en HU2 y HU11.
+- Se usan fechas dinamicas para evitar colisiones entre corridas, porque los holds expiran a los 10 minutos.
+- La suite valida comportamiento real observado del backend, no una expectativa idealizada cuando ambos difieren.
+- La referencia funcional de API y los archivos Postman se mantienen en el mismo repositorio para facilitar analisis manual y automatizado.
+- Los casos ignorados no se borran: quedan documentados en codigo para reactivarlos cuando el backend exponga un contrato mas estable.
 
-- Se aplicó DDT en negativos y edge cases donde sí reducía repetición, especialmente en HU2 y HU11.
-- Se usan fechas dinámicas para evitar colisiones entre corridas porque los holds viven 10 minutos.
-- La logica procedural de seleccion de habitaciones, bloqueos masivos y busqueda de pagos se centraliza en [src/test/java/common/workflows.js](src/test/java/common/workflows.js) para mantener los features declarativos.
-- La suite valida comportamiento real observado del backend, no el texto idealizado de la matriz cuando ambos difieren.
+## Decisiones tecnicas
 
-## Decisiones técnicas
+- El task `test` usa JUnit Platform y publica sus salidas en `target/karate-reports`, `target/surefire-reports` y `target/gradle-test-report`.
+- `sourceSets.test.resources` toma `src/test/java` como fuente de recursos Karate y excluye `*.java`.
+- `TestRunner` ejecuta todo lo no marcado con `@ignore` y corre con paralelismo de 5 hilos.
+- `karate-config.js` soporta los ambientes `local`, `dev`, `ci`, `staging` y `prod`, y expone `baseUrl`, `authToken`, `authEnforced`, `workerEnabled`, `holdTtlSeconds` y `defaultHeaders`.
+- El harness externo usa el `docker-compose` del checkout remoto en lugar de imponer uno propio, para validar el sistema objetivo mas cerca de su forma real de despliegue.
+- CI combina validacion funcional y validacion de seguridad basica con OWASP ZAP en un mismo flujo.
 
-- El runner global excluye todo lo marcado con `@ignore` desde [src/test/java/TestRunner.java](src/test/java/TestRunner.java#L9).
-- Los helpers comunes abstraen llamadas a `rooms/available`, `rooms/{id}/hold`, `holds`, `payments` y `reservations` en [src/test/java/common/api-helpers.feature](src/test/java/common/api-helpers.feature).
-- La configuración global usa `karate-config.js` y expone variables como `baseUrl`, `authToken`, `defaultHeaders`, `authEnforced` y `workerEnabled` en [src/test/java/karate-config.js](src/test/java/karate-config.js).
+## Conclusiones
+
+Este repositorio ya funciona como una suite de QA externa orientada a contrato para el motor de reservas de Travel Hotel, con foco real en los flujos mas sensibles del checkout.
+
+La cobertura activa prioriza disponibilidad, holds, pagos idempotentes, confirmacion de reserva y validacion temprana de fechas. Los gaps actuales no estan ocultos: quedan explicitados como casos ignorados o fuera de alcance hasta que el backend exponga senales mas estables para automatizarlos sin generar falsos positivos.
