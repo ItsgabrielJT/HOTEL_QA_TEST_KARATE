@@ -1,7 +1,8 @@
 function fn() {
+  var System = Java.type('java.lang.System');
   var env = karate.env || 'local';
   var timeout = karate.properties['karate.timeout'] ? parseInt(karate.properties['karate.timeout'], 10) : 30000;
-  var baseUrlOverride = karate.properties['base.url'] || karate.properties['baseUrl'] || '';
+  var baseUrlOverride = karate.properties['base.url'] || karate.properties['baseUrl'] || System.getenv('BASE_URL') || '';
   var baseUrlMap = {
     local: 'http://localhost:5173/api/v1',
     dev: 'http://localhost:5173/api/v1',

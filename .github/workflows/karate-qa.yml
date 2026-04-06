@@ -77,7 +77,8 @@ jobs:
           bash -n scripts/run_karate_qa.sh
           shellcheck scripts/run_karate_qa.sh
 
-  postgres-qa:
+  api-service-qa:
+    name: API Service QA
     needs: lint
     runs-on: ubuntu-22.04
     timeout-minutes: 35
@@ -138,24 +139,33 @@ jobs:
             echo
             echo "## Karate log tail"
             echo '```text'
-            tail -n 120 qa-artifacts/latest/logs/gradle-karate.log 2>/dev/null || echo "Karate log unavailable"
+            tail -n 60 qa-artifacts/latest/logs/gradle-karate.log 2>/dev/null || echo "Karate log unavailable"
             echo '```'
             echo
-            echo "## ZAP log tail"
+            echo "## ZAP findings tail"
             echo '```text'
-            tail -n 120 qa-artifacts/latest/logs/zap.log 2>/dev/null || echo "ZAP log unavailable"
+            grep -E 'WARN-NEW|FAIL-NEW|FAIL-INPROG|ERROR|Permission denied|ZAP reporto|Karate reporto' qa-artifacts/latest/logs/zap.log 2>/dev/null | tail -n 80 || echo "ZAP findings unavailable"
             echo '```'
             echo
             if [ -f qa-artifacts/latest/reports/zap-report.md ]; then
               echo "## ZAP summary"
-              cat qa-artifacts/latest/reports/zap-report.md
+              sed -n '1,120p' qa-artifacts/latest/reports/zap-report.md
               echo
             fi
             echo "## Backend log tail"
             echo '```text'
-            tail -n 120 qa-artifacts/latest/logs/backend.log 2>/dev/null || echo "Backend log unavailable"
+            tail -n 40 qa-artifacts/latest/logs/backend.log 2>/dev/null || echo "Backend log unavailable"
             echo '```'
           } > qa-artifacts/latest/issue-body.md
+
+          ISSUE_BODY_MAX_CHARS=60000
+          ISSUE_BODY_SIZE=$(wc -c < qa-artifacts/latest/issue-body.md | tr -d ' ')
+          if [ "${ISSUE_BODY_SIZE}" -gt "${ISSUE_BODY_MAX_CHARS}" ]; then
+            tmp_file=$(mktemp)
+            head -c "${ISSUE_BODY_MAX_CHARS}" qa-artifacts/latest/issue-body.md > "${tmp_file}"
+            printf '\n\n[contenido truncado automaticamente por limite de GitHub Issues]\n' >> "${tmp_file}"
+            mv "${tmp_file}" qa-artifacts/latest/issue-body.md
+          fi
 
       - name: Create or update failure issue
         if: failure() && env.DB_QA_FAILURE_ISSUES_ENABLED == 'true'
@@ -166,7 +176,11 @@ jobs:
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const title = `Karate QA failure: ${process.env.TARGET_REPO_BRANCH} @ ${process.env.TARGET_REPO_URL}`;
-            const body = fs.readFileSync('qa-artifacts/latest/issue-body.md', 'utf8');
+            const maxBodyLength = 60000;
+            const rawBody = fs.readFileSync('qa-artifacts/latest/issue-body.md', 'utf8');
+            const body = rawBody.length > maxBodyLength
+              ? `${rawBody.slice(0, maxBodyLength)}\n\n[contenido truncado automaticamente por limite de GitHub Issues]`
+              : rawBody;
             const labels = ['qa-failure', 'karate-qa', 'karate', 'owasp-zap'];
 
             for (const name of labels) {
@@ -229,8 +243,8 @@ jobs:
             }
 
   publish-karate-report:
-    needs: postgres-qa
-    if: always() && github.event_name != 'pull_request' && (needs.postgres-qa.result == 'success' || needs.postgres-qa.result == 'failure')
+    needs: api-service-qa
+    if: always() && github.event_name != 'pull_request' && (needs.api-service-qa.result == 'success' || needs.api-service-qa.result == 'failure')
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     permissions:
@@ -243,15 +257,28 @@ jobs:
 
     steps:
       - name: Configure GitHub Pages
+        id: configure-pages
+        continue-on-error: true
         uses: actions/configure-pages@v5
+        with:
+          token: ${{ secrets.PAGES_ADMIN_TOKEN != '' && secrets.PAGES_ADMIN_TOKEN || github.token }}
+          enablement: ${{ secrets.PAGES_ADMIN_TOKEN != '' }}
+
+      - name: Skip Pages deployment when Pages is unavailable
+        if: steps.configure-pages.outcome != 'success'
+        run: |
+          echo 'GitHub Pages no esta habilitado para este repositorio y no se encontro el secreto PAGES_ADMIN_TOKEN para habilitarlo automaticamente.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Los artefactos del reporte siguen disponibles en la ejecucion actual.' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Download QA artifacts
+        if: steps.configure-pages.outcome == 'success'
         uses: actions/download-artifact@v4
         with:
           name: karate-qa-artifacts-${{ github.run_id }}
           path: downloaded-artifacts
 
       - name: Prepare GitHub Pages content
+        if: steps.configure-pages.outcome == 'success'
         run: |
           mkdir -p pages-site
           if [ -d downloaded-artifacts/reports/karate-pages ]; then
@@ -276,7 +303,7 @@ jobs:
               <main>
                 <h1>Karate QA</h1>
                 <p>La ejecucion actual no genero el reporte nativo de Karate esperado.</p>
-                <p>Estado del job postgres-qa: <strong>${{ needs.postgres-qa.result }}</strong></p>
+                <p>Estado del job api-service-qa: <strong>${{ needs.api-service-qa.result }}</strong></p>
                 <p>Run actual: <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">${{ github.run_id }}</a></p>
               </main>
             </body>
@@ -287,10 +314,12 @@ jobs:
           touch pages-site/.nojekyll
 
       - name: Upload Pages artifact
+        if: steps.configure-pages.outcome == 'success'
         uses: actions/upload-pages-artifact@v3
         with:
           path: pages-site
 
       - name: Deploy GitHub Pages
         id: deploy-pages
+        if: steps.configure-pages.outcome == 'success'
         uses: actions/deploy-pages@v4

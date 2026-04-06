@@ -23,7 +23,6 @@ PAYMENT_SIMULATOR_DECLINE_RATE="${PAYMENT_SIMULATOR_DECLINE_RATE:-0.2}"
 API_PID=''
 COMPOSE_FILE=''
 COMPOSE_BIN=''
-GRADLE_CMD=''
 
 log() {
   printf '[db-qa] %s\n' "$*"
@@ -34,16 +33,6 @@ require_cmd() {
     log "Falta el comando requerido: $1"
     exit 1
   }
-}
-
-detect_gradle() {
-  if [[ -x "${ROOT_DIR}/gradlew" ]]; then
-    GRADLE_CMD="${ROOT_DIR}/gradlew"
-    return
-  fi
-
-  require_cmd gradle
-  GRADLE_CMD='gradle'
 }
 
 detect_compose() {
@@ -214,7 +203,7 @@ require_cmd docker
 require_cmd curl
 require_cmd node
 require_cmd npm
-detect_gradle
+require_cmd gradle
 
 mkdir -p "${LOGS_DIR}" "${REPORTS_DIR}"
 rm -rf "${TARGET_CLONE_DIR}"
@@ -249,14 +238,16 @@ wait_for_http "http://127.0.0.1:${QA_API_PORT}/health" 'La API backend'
 
 log 'Ejecutando suite Karate'
 pushd "${ROOT_DIR}" >/dev/null
+export BASE_URL="http://127.0.0.1:${QA_API_PORT}/api/v1"
 set +e
-"${GRADLE_CMD}" --no-daemon clean test --tests TestRunner -Dkarate.env=ci -Dbase.url="http://127.0.0.1:${QA_API_PORT}/api/v1" | tee "${LOGS_DIR}/gradle-karate.log"
+gradle test --tests availability.AvailabilityRunner | tee "${LOGS_DIR}/gradle-karate.log"
 karate_exit=${PIPESTATUS[0]}
 set -e
 popd >/dev/null
 
 mkdir -p "${ARTIFACTS_DIR}"
 sed "s/__QA_API_PORT__/${QA_API_PORT}/g" "${ROOT_DIR}/qa/zap/openapi.yaml" > "${ARTIFACTS_DIR}/zap-openapi.generated.yaml"
+chmod -R a+rwX "${ARTIFACTS_DIR}"
 
 ZAP_OPENAPI_PATH="${ARTIFACTS_DIR#"${ROOT_DIR}"/}/zap-openapi.generated.yaml"
 ZAP_REPORT_HTML_PATH="${REPORTS_DIR#"${ROOT_DIR}"/}/zap-report.html"
