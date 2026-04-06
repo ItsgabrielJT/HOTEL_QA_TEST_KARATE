@@ -52,6 +52,22 @@ Para ejecutar la suite localmente necesitas:
 
 La suite asume el contrato observado en [api.md](api.md), no mocks.
 
+## Documentacion de API
+
+El repo incluye una referencia funcional de la API y archivos listos para Postman:
+
+- [docs/API_REFERENCE.md](docs/API_REFERENCE.md): documentacion de endpoints, payloads, respuestas y flujo recomendado.
+- [postman/Travel-Hotel-API.postman_collection.json](postman/Travel-Hotel-API.postman_collection.json): coleccion importable en Postman.
+- [postman/Travel-Hotel-Local.postman_environment.json](postman/Travel-Hotel-Local.postman_environment.json): environment local con variables base.
+
+Para probar la API manualmente en Postman:
+
+1. Importa la coleccion y el environment.
+2. Selecciona `Travel Hotel Local` como environment activo.
+3. Ejecuta `List Available Rooms` para poblar `roomId` y `amount` automaticamente.
+4. Ejecuta `Create Hold` para poblar `holdId`.
+5. Ejecuta `Create Payment` y luego las consultas de reserva.
+
 ## Ejecución local
 
 Ejecutar toda la suite activa:
