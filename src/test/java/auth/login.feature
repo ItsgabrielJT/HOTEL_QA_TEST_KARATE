@@ -1,4 +1,4 @@
-Feature: Resolve authentication context
+Feature: Resolve runtime authentication context
 
 Scenario: Build request headers from runtime configuration
   * def token = authToken

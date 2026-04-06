@@ -1,23 +1,15 @@
-Feature: Rooms availability API coverage for HU2
+Feature: Consult room availability for a stay
 
 Background:
   * def validators = read('classpath:common/validators.js')
+  * def workflows = read('classpath:common/workflows.js')
   * def data = read('availability-data.json')
-  * def LocalDate = Java.type('java.time.LocalDate')
   * def System = Java.type('java.lang.System')
   * def runSalt = System.currentTimeMillis() % 365
-  * def futureRange =
-  """
-  function(offsetDays, nights) {
-    var checkin = LocalDate.now().plusDays(offsetDays + runSalt).toString();
-    var checkout = LocalDate.now().plusDays(offsetDays + runSalt + nights).toString();
-    return { checkin: checkin, checkout: checkout };
-  }
-  """
-  * def baselineRange = futureRange(120, 2)
-  * def ddtSearchRange = futureRange(130, 2)
-  * def nonOverlapHoldRange = futureRange(140, 2)
-  * def fullBlockRange = futureRange(150, 1)
+  * def baselineRange = workflows.futureRange(120, 2, runSalt)
+  * def ddtSearchRange = workflows.futureRange(130, 2, runSalt)
+  * def nonOverlapHoldRange = workflows.futureRange(140, 2, runSalt)
+  * def fullBlockRange = workflows.futureRange(150, 1, runSalt)
 
 @smoke @alto @happy-path @TC-HU2-01
 Scenario: Return a seeded single room when no active block exists
@@ -29,55 +21,21 @@ Scenario: Return a seeded single room when no active block exists
 
 @alto @happy-path @TC-HU2-02
 Scenario: Keep a room visible when its hold does not overlap the search range
-  * def before = call read('classpath:common/api-helpers.feature@listAvailableRooms') baselineRange
-  * def nonOverlapBefore = call read('classpath:common/api-helpers.feature@listAvailableRooms') nonOverlapHoldRange
-  * match before.status == 200
-  * match nonOverlapBefore.status == 200
-  * def sharedCandidate =
-  """
-  function() {
-    for (var i = 0; i < before.response.length; i++) {
-      var room = before.response[i];
-      if (validators.containsRoom(nonOverlapBefore.response, room.room_number, room.hotel_id)) {
-        return room;
-      }
-    }
-    return null;
-  }
-  """
-  * def candidate = sharedCandidate()
-  * if (!candidate) karate.fail('No hay habitaciones que estén disponibles en ambos rangos para validar HU2-02')
+  * def sharedAvailability = workflows.sharedAvailability(baselineRange, nonOverlapHoldRange, 'No hay habitaciones que esten disponibles en ambos rangos para validar HU2-02')
+  * def candidate = sharedAvailability.room
   * def hold = call read('classpath:common/api-helpers.feature@createHold') { roomId: '#(candidate.id)', checkin: '#(nonOverlapHoldRange.checkin)', checkout: '#(nonOverlapHoldRange.checkout)' }
   * match hold.status == 201
-  * def after = call read('classpath:common/api-helpers.feature@listAvailableRooms') baselineRange
-  * match after.status == 200
+  * def after = workflows.availability(baselineRange)
   * assert validators.containsRoom(after.response, candidate.room_number, candidate.hotel_id)
 
 @alto @error-path @edge-case @ddt @TC-HU2-03 @TC-HU2-05
 Scenario Outline: Remove a room from availability when an active hold overlaps the requested dates
-  * def before = call read('classpath:common/api-helpers.feature@listAvailableRooms') ddtSearchRange
-  * match before.status == 200
-  * def holdRange = overlapKind == 'exact' ? { checkin: ddtSearchRange.checkin, checkout: ddtSearchRange.checkout } : { checkin: LocalDate.now().plusDays(131 + runSalt).toString(), checkout: LocalDate.now().plusDays(134 + runSalt).toString() }
-  * def holdRangeAvailability = call read('classpath:common/api-helpers.feature@listAvailableRooms') holdRange
-  * match holdRangeAvailability.status == 200
-  * def sharedCandidate =
-  """
-  function() {
-    for (var i = 0; i < before.response.length; i++) {
-      var room = before.response[i];
-      if (validators.containsRoom(holdRangeAvailability.response, room.room_number, room.hotel_id)) {
-        return room;
-      }
-    }
-    return null;
-  }
-  """
-  * def candidate = sharedCandidate()
-  * if (!candidate) karate.fail('No hay habitaciones compatibles entre el rango buscado y el rango del hold para <tcId>')
+  * def holdRange = overlapKind == 'exact' ? ddtSearchRange : workflows.rangeFromOffsets(131, 134, runSalt)
+  * def sharedAvailability = workflows.sharedAvailability(ddtSearchRange, holdRange, 'No hay habitaciones compatibles entre el rango buscado y el rango del hold para <tcId>')
+  * def candidate = sharedAvailability.room
   * def hold = call read('classpath:common/api-helpers.feature@createHold') { roomId: '#(candidate.id)', checkin: '#(holdRange.checkin)', checkout: '#(holdRange.checkout)' }
   * match hold.status == 201
-  * def after = call read('classpath:common/api-helpers.feature@listAvailableRooms') ddtSearchRange
-  * match after.status == 200
+  * def after = workflows.availability(ddtSearchRange)
   * assert !validators.containsRoom(after.response, candidate.room_number, candidate.hotel_id)
 
 Examples:
@@ -93,64 +51,19 @@ Scenario: Hide a confirmed reservation from availability results
 
 @ignore @alto @edge-case @TC-HU2-06
 Scenario: Hide a room while a hold is active and show it again once the hold ends
-  * def Instant = Java.type('java.time.Instant')
-  * def Thread = Java.type('java.lang.Thread')
-  * def before = call read('classpath:common/api-helpers.feature@listAvailableRooms') baselineRange
-  * match before.status == 200
+  * def before = workflows.availability(baselineRange)
   * def candidate = validators.firstRoom(before.response)
   * if (!candidate) karate.fail('No hay habitaciones disponibles para validar HU2-06')
   * def hold = call read('classpath:common/api-helpers.feature@createHold') { roomId: '#(candidate.id)', checkin: '#(baselineRange.checkin)', checkout: '#(baselineRange.checkout)' }
   * match hold.status == 201
-  * def whilePending = call read('classpath:common/api-helpers.feature@listAvailableRooms') baselineRange
-  * match whilePending.status == 200
+  * def whilePending = workflows.availability(baselineRange)
   * assert !validators.containsRoom(whilePending.response, candidate.room_number, candidate.hotel_id)
-  * def waitForRoomToReturn =
-  """
-  function() {
-    var deadline = Instant.parse(hold.response.expires_at).plusSeconds(20);
-    while (Instant.now().isBefore(deadline)) {
-      var current = karate.call('classpath:common/api-helpers.feature@listAvailableRooms', baselineRange);
-      if (current.status === 200 && validators.containsRoom(current.response, candidate.room_number, candidate.hotel_id)) {
-        return current;
-      }
-      Thread.sleep(5000);
-    }
-    return karate.call('classpath:common/api-helpers.feature@listAvailableRooms', baselineRange);
-  }
-  """
-  * def afterHoldEnds = waitForRoomToReturn()
-  * match afterHoldEnds.status == 200
+  * def afterHoldEnds = workflows.waitForRoomToReturn(hold.response, baselineRange, candidate, validators)
   * assert validators.containsRoom(afterHoldEnds.response, candidate.room_number, candidate.hotel_id)
 
 @alto @edge-case @TC-HU2-07
 Scenario: Return an empty list when every currently available room is blocked for the range
-  * def before = call read('classpath:common/api-helpers.feature@listAvailableRooms') fullBlockRange
-  * match before.status == 200
-  * def blockAll =
-  """
-  function(room) {
-    var hold = karate.call('classpath:common/api-helpers.feature@createHold', {
-      roomId: room.id,
-      checkin: fullBlockRange.checkin,
-      checkout: fullBlockRange.checkout
-    });
-    if (hold.status !== 201) {
-      karate.fail('No se pudo bloquear la habitación ' + room.room_number + ' para HU2-07');
-    }
-  }
-  """
-  * def ensureNoAvailability =
-  """
-  function() {
-    if (!before.response.length) {
-      return before;
-    }
-    karate.forEach(before.response, blockAll);
-    return karate.call('classpath:common/api-helpers.feature@listAvailableRooms', fullBlockRange);
-  }
-  """
-  * def after = ensureNoAvailability()
-  * match after.status == 200
+  * def after = workflows.blockAllAvailableRooms(fullBlockRange)
   * match after.response == []
 
 @negativo @contract
