@@ -178,10 +178,10 @@ jobs:
         env:
           QA_MODE: karate
 
-      - name: Publish execution summary
+      - name: Publish Karate summary
         if: always()
         run: |
-          SUMMARY_FILE="qa-artifacts/karate/reports/execution-summary.md"
+          SUMMARY_FILE="qa-artifacts/karate/reports/karate-summary.md"
           if [[ -f "${SUMMARY_FILE}" ]]; then
             cat "${SUMMARY_FILE}" >> "${GITHUB_STEP_SUMMARY}"
           else
@@ -276,6 +276,17 @@ jobs:
         run: bash scripts/run_karate_qa.sh
         env:
           QA_MODE: zap
+
+      - name: Publish ZAP summary
+        if: always()
+        run: |
+          SUMMARY_FILE="qa-artifacts/zap/reports/zap-summary.md"
+          if [[ -f "${SUMMARY_FILE}" ]]; then
+            cat "${SUMMARY_FILE}" >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "### OWASP ZAP Scan" >> "${GITHUB_STEP_SUMMARY}"
+            echo "Resumen no generado (el script puede haber fallado antes de completar)." >> "${GITHUB_STEP_SUMMARY}"
+          fi
 
       - name: Upload ZAP artifacts
         if: always()

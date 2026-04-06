@@ -100,23 +100,31 @@ El workflow principal esta en `.github/workflows/karate-qa.yml` y cubre tres mod
 - Programado cada 6 horas.
 - Automatico en `push` y `pull_request` hacia `main` cuando cambian archivos relevantes de la suite.
 
-El pipeline se divide en tres jobs:
+El pipeline se divide en cuatro jobs:
 
 1. `lint`
    - Ejecuta `bash -n` y `shellcheck` sobre `scripts/run_karate_qa.sh`.
-2. `api-service-qa`
+   - Valida el YAML del workflow con `yamllint`.
+   - Valida el spec OpenAPI con `@redocly/cli`.
+2. `karate-tests`
    - Configura Java 17, Gradle y Node.js 20.
-   - Clona el repositorio objetivo y la rama objetivo.
-   - Levanta Docker Compose desde el checkout remoto.
-   - Arranca el backend bajo prueba.
-   - Ejecuta Karate y OWASP ZAP.
-   - Publica `qa-artifacts/latest` como artefacto de GitHub Actions.
-   - Puede crear o actualizar un issue automatico cuando falla la suite.
+   - Cachea dependencias npm del repo objetivo.
+   - Clona el repositorio objetivo en la rama objetivo.
+   - Levanta Docker Compose y arranca el backend bajo prueba.
+   - Ejecuta un health check explicito antes de correr los tests.
+   - Ejecuta por defecto los cinco runners de dominio: `availability`, `holds`, `payments`, `reservations` y `validation`.
+   - Para correr solo un subconjunto, pasar `KARATE_FILTER` (ej: `--tests availability.AvailabilityRunner`).
+   - Publica `qa-artifacts/karate` como artefacto de GitHub Actions.
+3. `zap-scan`
+   - Corre en paralelo con `karate-tests` sobre su propio runner.
+   - Levanta la misma infra de forma independiente sin necesitar Java ni Gradle.
+   - Hace health check y ejecuta el escaneo DAST con OWASP ZAP sobre el spec OpenAPI.
+   - Publica `qa-artifacts/zap` como artefacto de GitHub Actions.
+4. `publish-and-notify`
+   - Corre fuera de `pull_request` tras completar `karate-tests` y `zap-scan`.
+   - Descarga ambos sets de artefactos y publica el sitio en GitHub Pages.
+   - Puede crear o actualizar un issue automatico cuando falla cualquiera de los jobs de test.
    - Si una corrida posterior recupera el estado, comenta y cierra el issue automaticamente.
-3. `publish-karate-report`
-   - Corre fuera de `pull_request`.
-   - Descarga artefactos y publica el sitio en GitHub Pages.
-   - Si no existe el reporte esperado, publica una pagina de estado del run actual en lugar de dejar un reporte viejo.
 
 La corrida manual acepta inputs, pero esos inputs solo funcionan como override de las variables configuradas en el repositorio.
 
@@ -155,28 +163,46 @@ Comandos utiles:
 gradle testClasses
 ```
 
+Ejecucion completa de todos los dominios (comportamiento por defecto en CI):
+
 ```bash
-gradle test --tests availability.AvailabilityRunner
+gradle test \
+  --tests 'availability.AvailabilityRunner' \
+  --tests 'holds.HoldsRunner' \
+  --tests 'payments.PaymentsRunner' \
+  --tests 'reservations.ReservationsRunner' \
+  --tests 'validation.ValidationRunner'
+```
+
+Ejecucion por dominio individual:
+
+```bash
+gradle test --tests 'availability.AvailabilityRunner'
 ```
 
 ```bash
-gradle test --tests holds.HoldsRunner
+gradle test --tests 'holds.HoldsRunner'
 ```
 
 ```bash
-gradle test --tests payments.PaymentsRunner
+gradle test --tests 'payments.PaymentsRunner'
 ```
 
 ```bash
-gradle test --tests reservations.ReservationsRunner
+gradle test --tests 'reservations.ReservationsRunner'
 ```
 
 ```bash
-gradle test --tests validation.ValidationRunner
+gradle test --tests 'validation.ValidationRunner'
 ```
 
+Combinacion de dominios:
+
 ```bash
-gradle test --tests availability.AvailabilityRunner --tests holds.HoldsRunner --tests validation.ValidationRunner
+gradle test \
+  --tests 'availability.AvailabilityRunner' \
+  --tests 'holds.HoldsRunner' \
+  --tests 'validation.ValidationRunner'
 ```
 
 ```bash

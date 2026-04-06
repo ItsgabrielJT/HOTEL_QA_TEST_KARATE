@@ -232,6 +232,99 @@ EOF
   fi
 }
 
+# Karate-only summary — llamado al final del modo 'karate' antes de salir.
+generate_karate_summary() {
+  mkdir -p "${REPORTS_DIR}"
+
+  local karate_status='FAIL'
+  local scenarios_line='Sin datos de escenarios'
+  local features_line='Sin datos de features'
+  local summary_file="${REPORTS_DIR}/karate-summary.md"
+
+  if [[ "${KARATE_EXIT}" -eq 0 ]]; then
+    karate_status='PASS'
+  fi
+
+  if [[ -f "${LOGS_DIR}/gradle-karate.log" ]]; then
+    scenarios_line=$(grep -E 'scenarios:[[:space:]]+[0-9]+ \| passed:' "${LOGS_DIR}/gradle-karate.log" | tail -1 || true)
+    features_line=$(grep -E 'features:[[:space:]]+[0-9]+ \| skipped:' "${LOGS_DIR}/gradle-karate.log" | tail -1 || true)
+    [[ -n "${scenarios_line}" ]] || scenarios_line='Sin datos de escenarios'
+    [[ -n "${features_line}" ]]   || features_line='Sin datos de features'
+  fi
+
+  cat > "${summary_file}" <<EOF
+# Karate Tests — Resumen de Ejecucion
+
+- Estado: ${karate_status}
+- Repositorio: ${TARGET_REPO_URL}
+- Rama: ${TARGET_REPO_BRANCH}
+- Commit: ${TARGET_COMMIT:-desconocido}
+- URL base API: http://127.0.0.1:${QA_API_PORT}/api/v1
+
+| Suite | Estado | Evidencia |
+|---|---|---|
+| Karate — scenarios | ${karate_status} | ${scenarios_line} |
+| Karate — features  | ${karate_status} | ${features_line} |
+
+## Reportes
+
+- Karate HTML: reports/karate-report/karate-summary.html
+- Gradle HTML: reports/gradle-report/index.html
+- JUnit XML:   reports/surefire-reports/
+EOF
+
+  if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+    cat "${summary_file}" >> "${GITHUB_STEP_SUMMARY}"
+  fi
+}
+
+# ZAP-only summary — llamado al final del modo 'zap' antes de salir.
+generate_zap_summary() {
+  mkdir -p "${REPORTS_DIR}"
+
+  local zap_status='FAIL'
+  local warn_count='0'
+  local fail_count='0'
+  local error_count='0'
+  local summary_file="${REPORTS_DIR}/zap-summary.md"
+
+  case "${ZAP_EXIT}" in
+    0) zap_status='PASS' ;;
+    2) zap_status='WARN' ;;
+    *) zap_status='FAIL' ;;
+  esac
+
+  if [[ -f "${LOGS_DIR}/zap.log" ]]; then
+    warn_count=$(grep -c '^WARN-NEW:'           "${LOGS_DIR}/zap.log" || true)
+    fail_count=$(grep -cE '^(FAIL-NEW|FAIL-INPROG):' "${LOGS_DIR}/zap.log" || true)
+    error_count=$(grep -cE 'Permission denied|ERROR ' "${LOGS_DIR}/zap.log" || true)
+  fi
+
+  cat > "${summary_file}" <<EOF
+# OWASP ZAP — Resumen de Escaneo
+
+- Estado: ${zap_status}
+- Repositorio: ${TARGET_REPO_URL}
+- Rama: ${TARGET_REPO_BRANCH}
+- Commit: ${TARGET_COMMIT:-desconocido}
+- URL base API: http://127.0.0.1:${QA_API_PORT}/api/v1
+
+| Gate | Estado | Detalle |
+|---|---|---|
+| OWASP ZAP | ${zap_status} | WARN-NEW=${warn_count}, FAIL-NEW=${fail_count}, errores=${error_count} |
+
+## Reportes
+
+- ZAP HTML:     reports/zap-report.html
+- ZAP Markdown: reports/zap-report.md
+- ZAP JSON:     reports/zap-report.json
+EOF
+
+  if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+    cat "${summary_file}" >> "${GITHUB_STEP_SUMMARY}"
+  fi
+}
+
 build_pages_index() {
   if [[ ! -d "${PAGES_DIR}" ]]; then
     return
@@ -391,8 +484,20 @@ if [[ "${QA_MODE}" == "all" || "${QA_MODE}" == "karate" ]]; then
   pushd "${ROOT_DIR}" >/dev/null
   export BASE_URL="http://127.0.0.1:${QA_API_PORT}/api/v1"
   set +e
-  # Para acotar la suite pasar la variable KARATE_FILTER (ej: --tests availability.AvailabilityRunner).
-  gradle test "${KARATE_FILTER:-}" | tee "${LOGS_DIR}/gradle-karate.log"
+  if [[ -n "${KARATE_FILTER:-}" ]]; then
+    # Override: ejecutar solo los runners indicados en KARATE_FILTER.
+    # Ej: KARATE_FILTER="--tests availability.AvailabilityRunner"
+    # shellcheck disable=SC2086
+    gradle test ${KARATE_FILTER} | tee "${LOGS_DIR}/gradle-karate.log"
+  else
+    # Default: ejecutar todos los runners de dominio de forma explicita.
+    gradle test \
+      --tests 'availability.AvailabilityRunner' \
+      --tests 'holds.HoldsRunner' \
+      --tests 'payments.PaymentsRunner' \
+      --tests 'reservations.ReservationsRunner' \
+      --tests 'validation.ValidationRunner' | tee "${LOGS_DIR}/gradle-karate.log"
+  fi
   KARATE_EXIT=${PIPESTATUS[0]}
   set -e
   popd >/dev/null
@@ -400,6 +505,7 @@ if [[ "${QA_MODE}" == "all" || "${QA_MODE}" == "karate" ]]; then
   if [[ "${QA_MODE}" == "karate" ]]; then
     # Persist exit code so the cleanup phase can use it in the execution summary.
     printf 'KARATE_EXIT=%q\n' "${KARATE_EXIT}" >> "${STATE_FILE}"
+    generate_karate_summary || true
     if [[ ${KARATE_EXIT} -ne 0 ]]; then
       log 'Karate reporto fallos'
       exit "${KARATE_EXIT}"
@@ -443,6 +549,7 @@ if [[ "${QA_MODE}" == "all" || "${QA_MODE}" == "zap" ]]; then
   if [[ "${QA_MODE}" == "zap" ]]; then
     # Persist exit code so the cleanup phase can use it in the execution summary.
     printf 'ZAP_EXIT=%q\n' "${ZAP_EXIT}" >> "${STATE_FILE}"
+    generate_zap_summary || true
     case "${ZAP_EXIT}" in
       0) ;;
       2) log 'OWASP ZAP termino con advertencias no bloqueantes' ;;
