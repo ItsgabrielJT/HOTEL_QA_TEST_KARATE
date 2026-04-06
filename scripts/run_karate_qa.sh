@@ -163,7 +163,7 @@ build_pages_index() {
     <meta http-equiv="Pragma" content="no-cache" />
     <meta http-equiv="Expires" content="0" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Database QA - Karate Report</title>
+    <title>Karate QA - Karate Report</title>
     <style>
       body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #111827; background: #f8fafc; }
       main { max-width: 56rem; background: #ffffff; padding: 2rem; border-radius: 1rem; box-shadow: 0 18px 48px rgba(15, 23, 42, 0.08); }
@@ -176,7 +176,7 @@ build_pages_index() {
   </head>
   <body>
     <main>
-      <h1>Database QA</h1>
+      <h1>Karate QA</h1>
       <p class="meta">Pipeline de Karate + OWASP ZAP contra ${TARGET_REPO_URL} (${TARGET_REPO_BRANCH}).</p>
       <ul>
         <li><a href="karate-summary.html">Abrir resumen nativo de Karate</a></li>
@@ -258,17 +258,22 @@ popd >/dev/null
 mkdir -p "${ARTIFACTS_DIR}"
 sed "s/__QA_API_PORT__/${QA_API_PORT}/g" "${ROOT_DIR}/qa/zap/openapi.yaml" > "${ARTIFACTS_DIR}/zap-openapi.generated.yaml"
 
+ZAP_OPENAPI_PATH="${ARTIFACTS_DIR#"${ROOT_DIR}"/}/zap-openapi.generated.yaml"
+ZAP_REPORT_HTML_PATH="${REPORTS_DIR#"${ROOT_DIR}"/}/zap-report.html"
+ZAP_REPORT_MD_PATH="${REPORTS_DIR#"${ROOT_DIR}"/}/zap-report.md"
+ZAP_REPORT_JSON_PATH="${REPORTS_DIR#"${ROOT_DIR}"/}/zap-report.json"
+
 log 'Ejecutando OWASP ZAP API scan'
 set +e
 docker run --rm --network=host \
   -v "${ROOT_DIR}:/zap/wrk:rw" \
   ghcr.io/zaproxy/zaproxy:stable \
   zap-api-scan.py \
-  -t "/zap/wrk/${ARTIFACTS_DIR#${ROOT_DIR}/}/zap-openapi.generated.yaml" \
+  -t "/zap/wrk/${ZAP_OPENAPI_PATH}" \
   -f openapi \
-  -r "/zap/wrk/${REPORTS_DIR#${ROOT_DIR}/}/zap-report.html" \
-  -w "/zap/wrk/${REPORTS_DIR#${ROOT_DIR}/}/zap-report.md" \
-  -J "/zap/wrk/${REPORTS_DIR#${ROOT_DIR}/}/zap-report.json" \
+  -r "/zap/wrk/${ZAP_REPORT_HTML_PATH}" \
+  -w "/zap/wrk/${ZAP_REPORT_MD_PATH}" \
+  -J "/zap/wrk/${ZAP_REPORT_JSON_PATH}" \
   -z "-config api.disablekey=true" | tee "${LOGS_DIR}/zap.log"
 zap_exit=${PIPESTATUS[0]}
 set -e
@@ -299,4 +304,4 @@ if [[ ${zap_exit} -eq 1 || ${zap_exit} -eq 3 || ${zap_exit} -gt 3 ]]; then
   exit "${zap_exit}"
 fi
 
-log 'Database QA finalizado correctamente'
+log 'Karate QA finalizado correctamente'
