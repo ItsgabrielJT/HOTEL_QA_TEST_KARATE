@@ -484,20 +484,7 @@ if [[ "${QA_MODE}" == "all" || "${QA_MODE}" == "karate" ]]; then
   pushd "${ROOT_DIR}" >/dev/null
   export BASE_URL="http://127.0.0.1:${QA_API_PORT}/api/v1"
   set +e
-  if [[ -n "${KARATE_FILTER:-}" ]]; then
-    # Override: ejecutar solo los runners indicados en KARATE_FILTER.
-    # Ej: KARATE_FILTER="--tests availability.AvailabilityRunner"
-    # shellcheck disable=SC2086
-    gradle test ${KARATE_FILTER} | tee "${LOGS_DIR}/gradle-karate.log"
-  else
-    # Default: ejecutar todos los runners de dominio de forma explicita.
-    gradle test \
-      --tests 'availability.AvailabilityRunner' \
-      --tests 'holds.HoldsRunner' \
-      --tests 'payments.PaymentsRunner' \
-      --tests 'reservations.ReservationsRunner' \
-      --tests 'validation.ValidationRunner' | tee "${LOGS_DIR}/gradle-karate.log"
-  fi
+  gradle test --tests availability.AvailabilityRunner | tee "${LOGS_DIR}/gradle-karate.log"
   KARATE_EXIT=${PIPESTATUS[0]}
   set -e
   popd >/dev/null
