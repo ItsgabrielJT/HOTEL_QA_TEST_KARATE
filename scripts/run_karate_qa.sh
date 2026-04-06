@@ -382,14 +382,17 @@ fi
 # ─── Karate phase ────────────────────────────────────────────────────────────
 if [[ "${QA_MODE}" == "all" || "${QA_MODE}" == "karate" ]]; then
   # In karate mode, source state so _teardown has COMPOSE_FILE / TARGET_COMMIT.
-  [[ "${QA_MODE}" == "karate" && -f "${STATE_FILE}" ]] && source "${STATE_FILE}" 2>/dev/null || true
+  if [[ "${QA_MODE}" == "karate" && -f "${STATE_FILE}" ]]; then
+    # shellcheck source=/dev/null
+    source "${STATE_FILE}" 2>/dev/null || true
+  fi
 
   log 'Ejecutando suite Karate completa'
   pushd "${ROOT_DIR}" >/dev/null
   export BASE_URL="http://127.0.0.1:${QA_API_PORT}/api/v1"
   set +e
   # Para acotar la suite pasar la variable KARATE_FILTER (ej: --tests availability.AvailabilityRunner).
-  gradle test ${KARATE_FILTER:-} | tee "${LOGS_DIR}/gradle-karate.log"
+  gradle test "${KARATE_FILTER:-}" | tee "${LOGS_DIR}/gradle-karate.log"
   KARATE_EXIT=${PIPESTATUS[0]}
   set -e
   popd >/dev/null
@@ -408,7 +411,10 @@ fi
 # ─── ZAP phase ───────────────────────────────────────────────────────────────
 if [[ "${QA_MODE}" == "all" || "${QA_MODE}" == "zap" ]]; then
   # In zap mode, source state so _teardown has COMPOSE_FILE / TARGET_COMMIT.
-  [[ "${QA_MODE}" == "zap" && -f "${STATE_FILE}" ]] && source "${STATE_FILE}" 2>/dev/null || true
+  if [[ "${QA_MODE}" == "zap" && -f "${STATE_FILE}" ]]; then
+    # shellcheck source=/dev/null
+    source "${STATE_FILE}" 2>/dev/null || true
+  fi
 
   mkdir -p "${ARTIFACTS_DIR}"
   sed "s/__QA_API_PORT__/${QA_API_PORT}/g" "${ROOT_DIR}/qa/zap/openapi.yaml" > "${ARTIFACTS_DIR}/zap-openapi.generated.yaml"
