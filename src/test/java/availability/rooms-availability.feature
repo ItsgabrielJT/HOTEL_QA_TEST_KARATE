@@ -92,10 +92,35 @@ Scenario: Hide a confirmed reservation from availability results
   * assert !validators.containsRoom(result.response, data.seedConfirmedReservation.roomNumber, data.seedConfirmedReservation.hotelId)
 
 @ignore @alto @edge-case @TC-HU2-06
-Scenario: Keep a room visible when only expired holds exist in the seed data
-  * def result = call read('classpath:common/api-helpers.feature@listAvailableRooms') baselineRange
-  * match result.status == 200
-  * assert validators.containsRoom(result.response, data.expiredHoldAssumptionRoom.roomNumber, data.expiredHoldAssumptionRoom.hotelId)
+Scenario: Hide a room while a hold is active and show it again once the hold ends
+  * def Instant = Java.type('java.time.Instant')
+  * def Thread = Java.type('java.lang.Thread')
+  * def before = call read('classpath:common/api-helpers.feature@listAvailableRooms') baselineRange
+  * match before.status == 200
+  * def candidate = validators.firstRoom(before.response)
+  * if (!candidate) karate.fail('No hay habitaciones disponibles para validar HU2-06')
+  * def hold = call read('classpath:common/api-helpers.feature@createHold') { roomId: '#(candidate.id)', checkin: '#(baselineRange.checkin)', checkout: '#(baselineRange.checkout)' }
+  * match hold.status == 201
+  * def whilePending = call read('classpath:common/api-helpers.feature@listAvailableRooms') baselineRange
+  * match whilePending.status == 200
+  * assert !validators.containsRoom(whilePending.response, candidate.room_number, candidate.hotel_id)
+  * def waitForRoomToReturn =
+  """
+  function() {
+    var deadline = Instant.parse(hold.response.expires_at).plusSeconds(20);
+    while (Instant.now().isBefore(deadline)) {
+      var current = karate.call('classpath:common/api-helpers.feature@listAvailableRooms', baselineRange);
+      if (current.status === 200 && validators.containsRoom(current.response, candidate.room_number, candidate.hotel_id)) {
+        return current;
+      }
+      Thread.sleep(5000);
+    }
+    return karate.call('classpath:common/api-helpers.feature@listAvailableRooms', baselineRange);
+  }
+  """
+  * def afterHoldEnds = waitForRoomToReturn()
+  * match afterHoldEnds.status == 200
+  * assert validators.containsRoom(afterHoldEnds.response, candidate.room_number, candidate.hotel_id)
 
 @alto @edge-case @TC-HU2-07
 Scenario: Return an empty list when every currently available room is blocked for the range
@@ -127,3 +152,12 @@ Scenario: Return an empty list when every currently available room is blocked fo
   * def after = ensureNoAvailability()
   * match after.status == 200
   * match after.response == []
+
+@negativo @contract
+Scenario: Reject availability searches when checkin is in the past
+  * def pastRange = { checkin: '2026-04-03', checkout: '2026-04-04' }
+  * def result = call read('classpath:common/api-helpers.feature@listAvailableRooms') pastRange
+  * match result.status == 400
+  * match result.response.error == 'Bad Request'
+  * match result.response.statusCode == 400
+  * match result.response.message[0] contains 'checkin debe ser hoy o posterior'
