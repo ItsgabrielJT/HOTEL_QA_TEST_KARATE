@@ -52,11 +52,3 @@ Scenario: Replay a declined payment with the same idempotency key and preserve t
   * def replay = call read('classpath:common/api-helpers.feature@payHold') { holdId: '#(chain.hold.response.id)', amount: #(Number(chain.room.price_per_night)), idempotencyKey: '#(chain.payment.response.idempotency_key)' }
   * match replay.response.id == chain.payment.response.id
   * match replay.response.status == 'DECLINED'
-
-@ignore @edge-case @TC-HU5-03
-Scenario: Retry a declined payment with a new key when the hold remains retryable
-  * karate.abort()
-
-@ignore @seguridad @TC-HU5-04
-Scenario: Reject idempotency key reuse across different holds when the contract becomes strict
-  * karate.abort()
