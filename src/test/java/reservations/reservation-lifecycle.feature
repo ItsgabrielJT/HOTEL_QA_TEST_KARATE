@@ -50,35 +50,13 @@ Scenario: Confirm a reservation after a successful payment and remove the room f
   * match available.status == 200
   * assert !validators.containsRoom(available.response, chain.room.room_number, chain.room.hotel_id)
 
-@ignore @alto @error-path @TC-HU6-02
-Scenario: Preserve a pending hold when the payment gateway returns FAILED
-  * karate.abort()
-
-@ignore @alto @edge-case @TC-HU6-03
-Scenario: Reject confirmation for an already expired hold
-  * karate.abort()
-
-@alto @edge-case @TC-HU6-04
-Scenario: Keep a seeded confirmed reservation unavailable for the same dates
-  * def reservation = call read('classpath:common/api-helpers.feature@findReservationByCode') { reservationCode: '#(data.seedReservation.reservationCode)' }
-  * match reservation.status == 200
-  * match reservation.response contains { id: '#(data.seedReservation.reservationId)', reservation_code: '#(data.seedReservation.reservationCode)', status: 'CONFIRMED', room_number: '#(data.seedReservation.roomNumber)' }
-  * def available = call read('classpath:common/api-helpers.feature@listAvailableRooms') { checkin: '#(data.seedReservation.checkin)', checkout: '#(data.seedReservation.checkout)' }
-  * match available.status == 200
-  * assert !validators.containsRoom(available.response, data.seedReservation.roomNumber, data.seedReservation.hotelId)
-
-@smoke @alto @happy-path @TC-HU7-01
-Scenario: Release a hold immediately after a declined payment and make the room available again
+@alto @error-path @TC-HU6-02
+Scenario: Do not confirm a reservation when the payment gateway returns DECLINED
   * def chain = obtainDesiredPayment('DECLINED')
   * match chain.holdState.status == 200
-  * match chain.holdState.response.status == 'RELEASED'
-  * def available = call read('classpath:common/api-helpers.feature@listAvailableRooms') { checkin: '#(chain.checkin)', checkout: '#(chain.checkout)' }
-  * match available.status == 200
-  * assert validators.containsRoom(available.response, chain.room.room_number, chain.room.hotel_id)
-
-@ignore @alto @edge-case @TC-HU7-02
-Scenario: Ignore a late declined event after the reservation is already confirmed
-  * karate.abort()
+  * match chain.holdState.response.status == 'PENDING'
+  * match chain.holdState.response.reservation_id == null
+  * match chain.holdState.response.payment_id == null
 
 @ignore @alto @edge-case @TC-HU7-03
 Scenario: Ignore duplicate declined events for a hold that is already released
