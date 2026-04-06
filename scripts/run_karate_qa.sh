@@ -6,6 +6,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ARTIFACTS_DIR="${QA_ARTIFACTS_DIR:-${ROOT_DIR}/qa-artifacts/latest}"
 LOGS_DIR="${ARTIFACTS_DIR}/logs"
 REPORTS_DIR="${ARTIFACTS_DIR}/reports"
+PIPELINE_DIR="${ARTIFACTS_DIR}/pipeline"
 PAGES_DIR="${REPORTS_DIR}/karate-pages"
 TARGET_CLONE_DIR="${TARGET_CLONE_DIR:-${ROOT_DIR}/target-under-test}"
 
@@ -23,6 +24,9 @@ PAYMENT_SIMULATOR_DECLINE_RATE="${PAYMENT_SIMULATOR_DECLINE_RATE:-0.2}"
 API_PID=''
 COMPOSE_FILE=''
 COMPOSE_BIN=''
+KARATE_EXIT='99'
+ZAP_EXIT='99'
+TARGET_COMMIT=''
 
 log() {
   printf '[db-qa] %s\n' "$*"
@@ -102,7 +106,7 @@ wait_for_http() {
 }
 
 collect_reports() {
-  mkdir -p "${REPORTS_DIR}" "${PAGES_DIR}" "${LOGS_DIR}"
+  mkdir -p "${REPORTS_DIR}" "${PAGES_DIR}" "${LOGS_DIR}" "${PIPELINE_DIR}"
 
   if [[ -d "${ROOT_DIR}/target/karate-reports/karate-reports" ]]; then
     rm -rf "${REPORTS_DIR}/karate-report" "${PAGES_DIR}"
@@ -121,6 +125,101 @@ collect_reports() {
     rm -rf "${REPORTS_DIR}/surefire-reports"
     mkdir -p "${REPORTS_DIR}/surefire-reports"
     cp -R "${ROOT_DIR}/target/surefire-reports/." "${REPORTS_DIR}/surefire-reports/"
+  fi
+}
+
+generate_execution_summary() {
+  mkdir -p "${REPORTS_DIR}" "${PIPELINE_DIR}"
+
+  local karate_status='FAIL'
+  local zap_status='FAIL'
+  local overall_status='FAIL'
+  local scenarios_line='Sin datos de escenarios'
+  local features_line='Sin datos de features'
+  local warn_count='0'
+  local fail_count='0'
+  local error_count='0'
+  local summary_file="${REPORTS_DIR}/execution-summary.md"
+  local json_file="${PIPELINE_DIR}/execution-summary.json"
+
+  if [[ "${KARATE_EXIT}" -eq 0 ]]; then
+    karate_status='PASS'
+  fi
+
+  case "${ZAP_EXIT}" in
+    0)
+      zap_status='PASS'
+      ;;
+    2)
+      zap_status='WARN'
+      ;;
+    *)
+      zap_status='FAIL'
+      ;;
+  esac
+
+  if [[ "${karate_status}" == 'PASS' && ( "${zap_status}" == 'PASS' || "${zap_status}" == 'WARN' ) ]]; then
+    overall_status='PASS'
+  fi
+
+  if [[ -f "${LOGS_DIR}/gradle-karate.log" ]]; then
+    scenarios_line=$(grep -E 'scenarios:[[:space:]]+[0-9]+ \| passed:' "${LOGS_DIR}/gradle-karate.log" | tail -1 || true)
+    features_line=$(grep -E 'features:[[:space:]]+[0-9]+ \| skipped:' "${LOGS_DIR}/gradle-karate.log" | tail -1 || true)
+    [[ -n "${scenarios_line}" ]] || scenarios_line='Sin datos de escenarios'
+    [[ -n "${features_line}" ]] || features_line='Sin datos de features'
+  fi
+
+  if [[ -f "${LOGS_DIR}/zap.log" ]]; then
+    warn_count=$(grep -c '^WARN-NEW:' "${LOGS_DIR}/zap.log" || true)
+    fail_count=$(grep -cE '^(FAIL-NEW|FAIL-INPROG):' "${LOGS_DIR}/zap.log" || true)
+    error_count=$(grep -cE 'Permission denied|ERROR ' "${LOGS_DIR}/zap.log" || true)
+  fi
+
+  cat > "${summary_file}" <<EOF
+# Karate QA Summary
+
+- Resultado general: ${overall_status}
+- Repositorio objetivo: ${TARGET_REPO_URL}
+- Rama objetivo: ${TARGET_REPO_BRANCH}
+- Commit objetivo: ${TARGET_COMMIT:-desconocido}
+- API base URL: http://127.0.0.1:${QA_API_PORT}/api/v1
+
+| Gate | Status | Evidencia |
+|---|---|---|
+| Karate availability suite | ${karate_status} | ${scenarios_line} |
+| Karate features | ${karate_status} | ${features_line} |
+| OWASP ZAP | ${zap_status} | WARN-NEW=${warn_count}, FAIL-NEW=${fail_count}, errores=${error_count} |
+
+## Reportes
+
+- Karate summary HTML: reports/karate-report/karate-summary.html
+- Gradle report HTML: reports/gradle-report/index.html
+- JUnit XML: reports/surefire-reports
+- ZAP HTML: reports/zap-report.html
+- ZAP Markdown: reports/zap-report.md
+- Pages index: reports/karate-pages/index.html
+EOF
+
+  cat > "${json_file}" <<EOF
+{
+  "overall_status": "${overall_status}",
+  "karate": {
+    "status": "${karate_status}",
+    "exit_code": ${KARATE_EXIT},
+    "scenarios": $(printf '%s' "${scenarios_line}" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')
+  },
+  "zap": {
+    "status": "${zap_status}",
+    "exit_code": ${ZAP_EXIT},
+    "warn_new": ${warn_count},
+    "fail_new": ${fail_count},
+    "errors": ${error_count}
+  }
+}
+EOF
+
+  if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+    cat "${summary_file}" > "${GITHUB_STEP_SUMMARY}"
   fi
 }
 
@@ -193,6 +292,7 @@ cleanup() {
 
   collect_reports || true
   build_pages_index || true
+  generate_execution_summary || true
   exit "${exit_code}"
 }
 
@@ -205,11 +305,12 @@ require_cmd node
 require_cmd npm
 require_cmd gradle
 
-mkdir -p "${LOGS_DIR}" "${REPORTS_DIR}"
+mkdir -p "${LOGS_DIR}" "${REPORTS_DIR}" "${PIPELINE_DIR}"
 rm -rf "${TARGET_CLONE_DIR}"
 
 log "Clonando ${TARGET_REPO_URL}#${TARGET_REPO_BRANCH}"
 git clone --depth 1 --branch "${TARGET_REPO_BRANCH}" "${TARGET_REPO_URL}" "${TARGET_CLONE_DIR}" > "${LOGS_DIR}/git-clone.log" 2>&1
+TARGET_COMMIT="$(git -C "${TARGET_CLONE_DIR}" rev-parse HEAD 2>/dev/null || true)"
 
 find_compose_file
 
@@ -241,7 +342,7 @@ pushd "${ROOT_DIR}" >/dev/null
 export BASE_URL="http://127.0.0.1:${QA_API_PORT}/api/v1"
 set +e
 gradle test --tests availability.AvailabilityRunner | tee "${LOGS_DIR}/gradle-karate.log"
-karate_exit=${PIPESTATUS[0]}
+KARATE_EXIT=${PIPESTATUS[0]}
 set -e
 popd >/dev/null
 
@@ -266,14 +367,14 @@ docker run --rm --network=host \
   -w "/zap/wrk/${ZAP_REPORT_MD_PATH}" \
   -J "/zap/wrk/${ZAP_REPORT_JSON_PATH}" \
   -z "-config api.disablekey=true" | tee "${LOGS_DIR}/zap.log"
-zap_exit=${PIPESTATUS[0]}
+ZAP_EXIT=${PIPESTATUS[0]}
 set -e
 
-if [[ ${karate_exit} -ne 0 ]]; then
+if [[ ${KARATE_EXIT} -ne 0 ]]; then
   log 'Karate reporto fallos'
 fi
 
-case "${zap_exit}" in
+case "${ZAP_EXIT}" in
   0)
     ;;
   1|3)
@@ -283,16 +384,16 @@ case "${zap_exit}" in
     log 'OWASP ZAP termino con advertencias no bloqueantes'
     ;;
   *)
-    log "OWASP ZAP devolvio un codigo inesperado: ${zap_exit}"
+    log "OWASP ZAP devolvio un codigo inesperado: ${ZAP_EXIT}"
     ;;
 esac
 
-if [[ ${karate_exit} -ne 0 ]]; then
-  exit "${karate_exit}"
+if [[ ${KARATE_EXIT} -ne 0 ]]; then
+  exit "${KARATE_EXIT}"
 fi
 
-if [[ ${zap_exit} -eq 1 || ${zap_exit} -eq 3 || ${zap_exit} -gt 3 ]]; then
-  exit "${zap_exit}"
+if [[ ${ZAP_EXIT} -eq 1 || ${ZAP_EXIT} -eq 3 || ${ZAP_EXIT} -gt 3 ]]; then
+  exit "${ZAP_EXIT}"
 fi
 
 log 'Karate QA finalizado correctamente'

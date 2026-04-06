@@ -257,28 +257,15 @@ jobs:
 
     steps:
       - name: Configure GitHub Pages
-        id: configure-pages
-        continue-on-error: true
         uses: actions/configure-pages@v5
-        with:
-          token: ${{ secrets.PAGES_ADMIN_TOKEN != '' && secrets.PAGES_ADMIN_TOKEN || github.token }}
-          enablement: ${{ secrets.PAGES_ADMIN_TOKEN != '' }}
-
-      - name: Skip Pages deployment when Pages is unavailable
-        if: steps.configure-pages.outcome != 'success'
-        run: |
-          echo 'GitHub Pages no esta habilitado para este repositorio y no se encontro el secreto PAGES_ADMIN_TOKEN para habilitarlo automaticamente.' >> "$GITHUB_STEP_SUMMARY"
-          echo 'Los artefactos del reporte siguen disponibles en la ejecucion actual.' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Download QA artifacts
-        if: steps.configure-pages.outcome == 'success'
         uses: actions/download-artifact@v4
         with:
           name: karate-qa-artifacts-${{ github.run_id }}
           path: downloaded-artifacts
 
       - name: Prepare GitHub Pages content
-        if: steps.configure-pages.outcome == 'success'
         run: |
           mkdir -p pages-site
           if [ -d downloaded-artifacts/reports/karate-pages ]; then
@@ -314,12 +301,10 @@ jobs:
           touch pages-site/.nojekyll
 
       - name: Upload Pages artifact
-        if: steps.configure-pages.outcome == 'success'
         uses: actions/upload-pages-artifact@v3
         with:
           path: pages-site
 
       - name: Deploy GitHub Pages
         id: deploy-pages
-        if: steps.configure-pages.outcome == 'success'
         uses: actions/deploy-pages@v4
