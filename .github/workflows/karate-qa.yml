@@ -162,6 +162,18 @@ jobs:
           done
           echo "API lista y respondiendo."
 
+      - name: Publish infra summary
+        if: always()
+        run: |
+          SUMMARY_FILE="qa-artifacts/infra/reports/infra-summary.md"
+          if [[ -f "${SUMMARY_FILE}" ]]; then
+            cat "${SUMMARY_FILE}" >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "### Infraestructura" >> "${GITHUB_STEP_SUMMARY}"
+            echo "Resumen no generado (el script puede haber fallado antes de completar)." \
+              >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
       - name: Export infra metadata
         # Persiste configuracion de la infra validada para que los jobs
         # de test puedan referencia el mismo commit SHA.

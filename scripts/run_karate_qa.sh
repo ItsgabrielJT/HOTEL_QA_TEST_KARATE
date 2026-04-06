@@ -227,9 +227,6 @@ EOF
 }
 EOF
 
-  if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
-    cat "${summary_file}" > "${GITHUB_STEP_SUMMARY}"
-  fi
 }
 
 # Karate-only summary — llamado al final del modo 'karate' antes de salir.
@@ -273,9 +270,6 @@ generate_karate_summary() {
 - JUnit XML:   reports/surefire-reports/
 EOF
 
-  if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
-    cat "${summary_file}" >> "${GITHUB_STEP_SUMMARY}"
-  fi
 }
 
 # ZAP-only summary — llamado al final del modo 'zap' antes de salir.
@@ -320,9 +314,28 @@ generate_zap_summary() {
 - ZAP JSON:     reports/zap-report.json
 EOF
 
-  if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
-    cat "${summary_file}" >> "${GITHUB_STEP_SUMMARY}"
-  fi
+}
+
+# Infra-only summary — llamado al final del modo 'infra' antes de salir.
+generate_infra_summary() {
+  mkdir -p "${REPORTS_DIR}" "${PIPELINE_DIR}"
+
+  local summary_file="${REPORTS_DIR}/infra-summary.md"
+
+  cat > "${summary_file}" <<EOF
+# Infraestructura — Resumen de Arranque
+
+- Estado: PASS
+- Repositorio: ${TARGET_REPO_URL}
+- Rama: ${TARGET_REPO_BRANCH}
+- Commit: ${TARGET_COMMIT:-desconocido}
+- API base URL: http://127.0.0.1:${QA_API_PORT}/api/v1
+
+| Servicio     | Estado | Detalle                                                    |
+|---|---|---|
+| PostgreSQL   | PASS   | Puerto ${QA_DB_PORT} — pg_isready respondio correctamente  |
+| API backend  | PASS   | Health check http://127.0.0.1:${QA_API_PORT}/health OK     |
+EOF
 }
 
 build_pages_index() {
@@ -470,6 +483,7 @@ if [[ "${QA_MODE}" == "infra" ]]; then
     printf 'TARGET_COMMIT=%q\n' "${TARGET_COMMIT}"
   } > "${STATE_FILE}"
   log "Infraestructura lista. Estado guardado en ${STATE_FILE}"
+  generate_infra_summary || true
   exit 0
 fi
 # ─── Karate phase ────────────────────────────────────────────────────────────
