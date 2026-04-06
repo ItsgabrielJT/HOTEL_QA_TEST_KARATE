@@ -1,0 +1,140 @@
+openapi: 3.0.3
+info:
+  title: Travel Hotel API
+  version: 1.0.0
+servers:
+  - url: http://127.0.0.1:__QA_API_PORT__
+paths:
+  /health:
+    get:
+      summary: Health probe
+      responses:
+        '200':
+          description: OK
+  /api/v1/rooms/available:
+    get:
+      summary: List available rooms
+      parameters:
+        - in: query
+          name: checkin
+          required: true
+          schema:
+            type: string
+            format: date
+        - in: query
+          name: checkout
+          required: true
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Available rooms
+        '400':
+          description: Invalid date range
+  /api/v1/rooms/{room_id}/hold:
+    post:
+      summary: Create room hold
+      parameters:
+        - in: path
+          name: room_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - checkin
+                - checkout
+              properties:
+                checkin:
+                  type: string
+                  format: date
+                checkout:
+                  type: string
+                  format: date
+      responses:
+        '201':
+          description: Hold created
+        '400':
+          description: Validation error
+        '409':
+          description: Room not available
+  /api/v1/holds/{hold_id}:
+    get:
+      summary: Retrieve hold by id
+      parameters:
+        - in: path
+          name: hold_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Hold state
+        '404':
+          description: Hold not found
+  /api/v1/payments:
+    post:
+      summary: Process payment idempotently
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - hold_id
+                - amount
+                - idempotency_key
+              properties:
+                hold_id:
+                  type: string
+                  format: uuid
+                amount:
+                  type: number
+                  format: float
+                idempotency_key:
+                  type: string
+      responses:
+        '200':
+          description: Payment processed
+        '402':
+          description: Payment declined
+        '404':
+          description: Hold not found
+  /api/v1/reservations:
+    get:
+      summary: Retrieve reservation by code
+      parameters:
+        - in: query
+          name: reservation_code
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Reservation found
+        '404':
+          description: Reservation not found
+  /api/v1/reservations/{reservation_id}:
+    get:
+      summary: Retrieve reservation by id
+      parameters:
+        - in: path
+          name: reservation_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Reservation found
+        '404':
+          description: Reservation not found

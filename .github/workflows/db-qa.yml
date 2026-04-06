@@ -1,0 +1,296 @@
+name: Database QA
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+concurrency:
+  group: db-qa-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_repo_url:
+        description: Repositorio Git objetivo
+        required: false
+      target_repo_branch:
+        description: Rama objetivo
+        required: false
+      qa_db_port:
+        description: Puerto host para PostgreSQL
+        required: false
+      qa_api_port:
+        description: Puerto host para la API
+        required: false
+      failure_issues_enabled:
+        description: Crear o actualizar issue automaticamente cuando falle la suite
+        required: false
+  schedule:
+    - cron: '0 */6 * * *'
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/db-qa.yml
+      - scripts/**
+      - qa/**
+      - README.md
+      - build.gradle
+      - settings.gradle
+      - src/test/**
+      - docs/**
+      - postman/**
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/db-qa.yml
+      - scripts/**
+      - qa/**
+      - README.md
+      - build.gradle
+      - settings.gradle
+      - src/test/**
+      - docs/**
+      - postman/**
+
+jobs:
+  lint:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install ShellCheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Validate shell scripts
+        run: |
+          bash -n scripts/run_db_qa.sh
+          shellcheck scripts/run_db_qa.sh
+
+  postgres-qa:
+    needs: lint
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    env:
+      COMPOSE_PROJECT_NAME: hotel-qa-${{ github.run_id }}
+      TARGET_REPO_URL: ${{ inputs.target_repo_url || vars.DB_QA_TARGET_REPO_URL }}
+      TARGET_REPO_BRANCH: ${{ inputs.target_repo_branch || vars.DB_QA_TARGET_REPO_BRANCH }}
+      QA_DB_PORT: ${{ inputs.qa_db_port || vars.DB_QA_DB_PORT }}
+      QA_API_PORT: ${{ inputs.qa_api_port || vars.DB_QA_API_PORT }}
+      DB_QA_FAILURE_ISSUES_ENABLED: ${{ inputs.failure_issues_enabled || vars.DB_QA_FAILURE_ISSUES_ENABLED }}
+      QA_ARTIFACTS_DIR: ${{ github.workspace }}/qa-artifacts/latest
+      TARGET_CLONE_DIR: ${{ github.workspace }}/target-under-test
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run Karate and ZAP against target branch
+        timeout-minutes: 25
+        run: bash scripts/run_db_qa.sh
+
+      - name: Upload QA artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: db-qa-artifacts-${{ github.run_id }}
+          path: qa-artifacts/latest
+          if-no-files-found: warn
+
+      - name: Build failure issue body
+        if: failure() && env.DB_QA_FAILURE_ISSUES_ENABLED == 'true'
+        run: |
+          mkdir -p qa-artifacts/latest
+          {
+            echo "# Database QA failure"
+            echo
+            echo "- Target repo: ${TARGET_REPO_URL}"
+            echo "- Target branch: ${TARGET_REPO_BRANCH}"
+            echo "- Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo "- Commit under test: ${GITHUB_SHA}"
+            echo
+            echo "## Karate log tail"
+            echo '```text'
+            tail -n 120 qa-artifacts/latest/logs/gradle-karate.log 2>/dev/null || echo "Karate log unavailable"
+            echo '```'
+            echo
+            echo "## ZAP log tail"
+            echo '```text'
+            tail -n 120 qa-artifacts/latest/logs/zap.log 2>/dev/null || echo "ZAP log unavailable"
+            echo '```'
+            echo
+            if [ -f qa-artifacts/latest/reports/zap-report.md ]; then
+              echo "## ZAP summary"
+              cat qa-artifacts/latest/reports/zap-report.md
+              echo
+            fi
+            echo "## Backend log tail"
+            echo '```text'
+            tail -n 120 qa-artifacts/latest/logs/backend.log 2>/dev/null || echo "Backend log unavailable"
+            echo '```'
+          } > qa-artifacts/latest/issue-body.md
+
+      - name: Create or update failure issue
+        if: failure() && env.DB_QA_FAILURE_ISSUES_ENABLED == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const title = `Database QA failure: ${process.env.TARGET_REPO_BRANCH} @ ${process.env.TARGET_REPO_URL}`;
+            const body = fs.readFileSync('qa-artifacts/latest/issue-body.md', 'utf8');
+            const labels = ['qa-failure', 'database-qa', 'karate', 'owasp-zap'];
+
+            for (const name of labels) {
+              try {
+                await github.rest.issues.createLabel({ owner, repo, name });
+              } catch (error) {
+                if (error.status !== 422) {
+                  throw error;
+                }
+              }
+            }
+
+            const search = await github.rest.search.issuesAndPullRequests({
+              q: `repo:${owner}/${repo} is:issue in:title "${title}"`,
+              per_page: 1,
+            });
+
+            if (search.data.items.length > 0) {
+              const issue_number = search.data.items[0].number;
+              if (search.data.items[0].state === 'closed') {
+                await github.rest.issues.update({ owner, repo, issue_number, state: 'open' });
+              }
+              await github.rest.issues.addLabels({ owner, repo, issue_number, labels });
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+              core.info(`Updated existing issue #${issue_number}`);
+            } else {
+              const created = await github.rest.issues.create({ owner, repo, title, body, labels });
+              core.info(`Created new issue #${created.data.number}`);
+            }
+
+      - name: Resolve open failure issue on success
+        if: success() && env.DB_QA_FAILURE_ISSUES_ENABLED == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const title = `Database QA failure: ${process.env.TARGET_REPO_BRANCH} @ ${process.env.TARGET_REPO_URL}`;
+            const resolutionBody = [
+              '# Database QA recovery',
+              '',
+              `- Target repo: ${process.env.TARGET_REPO_URL}`,
+              `- Target branch: ${process.env.TARGET_REPO_BRANCH}`,
+              `- Workflow run: ${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
+              '',
+              'Karate y ZAP volvieron a pasar. Se cierra el issue automaticamente.',
+            ].join('\n');
+            const search = await github.rest.search.issuesAndPullRequests({
+              q: `repo:${owner}/${repo} is:issue is:open in:title "${title}"`,
+              per_page: 1,
+            });
+
+            if (search.data.items.length > 0) {
+              const issue_number = search.data.items[0].number;
+              await github.rest.issues.createComment({ owner, repo, issue_number, body: resolutionBody });
+              await github.rest.issues.update({ owner, repo, issue_number, state: 'closed' });
+              core.info(`Closed issue #${issue_number}`);
+            } else {
+              core.info('No open failure issue to close');
+            }
+
+  publish-karate-report:
+    needs: postgres-qa
+    if: always() && github.event_name != 'pull_request' && (needs.postgres-qa.result == 'success' || needs.postgres-qa.result == 'failure')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: karate-report
+      url: ${{ steps.deploy-pages.outputs.page_url }}
+
+    steps:
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Download QA artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: db-qa-artifacts-${{ github.run_id }}
+          path: downloaded-artifacts
+
+      - name: Prepare GitHub Pages content
+        run: |
+          mkdir -p pages-site
+          if [ -d downloaded-artifacts/reports/karate-pages ]; then
+            cp -R downloaded-artifacts/reports/karate-pages/. pages-site/
+          else
+            cat > pages-site/index.html <<'EOF'
+          <!doctype html>
+          <html lang="es">
+            <head>
+              <meta charset="utf-8" />
+              <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+              <meta http-equiv="Pragma" content="no-cache" />
+              <meta http-equiv="Expires" content="0" />
+              <meta name="viewport" content="width=device-width, initial-scale=1" />
+              <title>Database QA sin reporte Karate</title>
+              <style>
+                body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #1f2937; }
+                main { max-width: 56rem; }
+              </style>
+            </head>
+            <body>
+              <main>
+                <h1>Database QA</h1>
+                <p>La ejecucion actual no genero el reporte nativo de Karate esperado.</p>
+                <p>Estado del job postgres-qa: <strong>${{ needs.postgres-qa.result }}</strong></p>
+                <p>Run actual: <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">${{ github.run_id }}</a></p>
+              </main>
+            </body>
+          </html>
+          EOF
+          fi
+
+          touch pages-site/.nojekyll
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: pages-site
+
+      - name: Deploy GitHub Pages
+        id: deploy-pages
+        uses: actions/deploy-pages@v4
