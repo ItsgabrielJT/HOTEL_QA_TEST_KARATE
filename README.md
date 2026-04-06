@@ -50,8 +50,6 @@ Para ejecutar la suite localmente necesitas:
 3. La API de Travel Hotel levantada localmente en `http://localhost:5173`.
 4. Seeder de datos ya ejecutado en el backend.
 
-La suite asume el contrato observado en [api.md](api.md), no mocks.
-
 ## Documentacion de API
 
 El repo incluye una referencia funcional de la API y archivos listos para Postman:
@@ -73,7 +71,7 @@ Para probar la API manualmente en Postman:
 Ejecutar toda la suite activa:
 
 ```bash
-gradle test
+gradle testClasses
 ```
 
 Ejecutar solo disponibilidad:
@@ -139,26 +137,8 @@ Notas de implementación:
 - Se usan fechas dinámicas para evitar colisiones entre corridas porque los holds viven 10 minutos.
 - La suite valida comportamiento real observado del backend, no el texto idealizado de la matriz cuando ambos difieren.
 
-## Estado actual recomendado
-
-Paquete estable y verificado localmente:
-
-- HU2 parcial
-- HU3 parcial
-- HU11 completo
-
-Cobertura implementada pero no validada completamente en esta pasada por depender de aleatoriedad o contratos incompletos:
-
-- HU5 parcial
-- HU6 parcial
-- HU7 sin cobertura activa por divergencia de contrato
-
 ## Decisiones técnicas
 
 - El runner global excluye todo lo marcado con `@ignore` desde [src/test/java/TestRunner.java](src/test/java/TestRunner.java#L9).
 - Los helpers comunes abstraen llamadas a `rooms/available`, `rooms/{id}/hold`, `holds`, `payments` y `reservations` en [src/test/java/common/api-helpers.feature](src/test/java/common/api-helpers.feature).
 - La configuración global usa `karate-config.js` y expone variables como `baseUrl`, `authToken`, `defaultHeaders`, `authEnforced` y `workerEnabled` en [src/test/java/karate-config.js](src/test/java/karate-config.js).
-
-## Próximos pasos sugeridos
-
-1. Definir un contrato determinista del simulador de pagos para cerrar HU5, HU6 y HU7 sin flakiness.
