@@ -23,6 +23,7 @@ Estos casos quedaron fuera de esta suite porque hoy no son verificables de forma
 | Caso | Estado | Motivo |
 |---|---|---|
 | TC-HU3-02 | No activo | La prueba de concurrencia no es estable de forma end-to-end con el contrato actual y puede depender de timing interno del backend. |
+| TC-HU5-02 | No activo | El backend observado no preserva de forma estable el mismo rechazo al reintentar con la misma idempotency key, por lo que la expectativa funcional no es verificable de forma confiable. |
 | TC-HU5-04 | No activo | El backend observado reutiliza el resultado cacheado y no rechaza la llave cross-hold como espera la matriz. |
 | TC-HU7-02 | No activo | Requiere reprocesar eventos tardíos sobre una reserva ya confirmada con control explícito del flujo de eventos. |
 | TC-HU8-01 a TC-HU8-04 | No activo | La API no expone endpoint, hook o control de tiempo para disparar y verificar el worker de expiración de forma automatizable desde Karate. |
@@ -34,6 +35,7 @@ Estos casos quedaron fuera de esta suite porque hoy no son verificables de forma
 - [src/test/java/karate-config.js](src/test/java/karate-config.js): configuración global de Karate
 - [src/test/java/TestRunner.java](src/test/java/TestRunner.java): ejecuta todo lo no marcado con `@ignore`
 - [src/test/java/common/api-helpers.feature](src/test/java/common/api-helpers.feature): helpers compartidos para endpoints
+- [src/test/java/common/workflows.js](src/test/java/common/workflows.js): workflows reutilizables para rangos, seleccion de habitaciones y cadenas de pago
 - [src/test/java/common/validators.js](src/test/java/common/validators.js): validadores reutilizables
 - [src/test/java/availability/rooms-availability.feature](src/test/java/availability/rooms-availability.feature): HU2
 - [src/test/java/holds/room-hold.feature](src/test/java/holds/room-hold.feature): HU3
@@ -126,7 +128,7 @@ Casos activos en el suite por defecto, es decir, ejecutados por [src/test/java/T
 |---|---|
 | HU2 | TC-HU2-01, TC-HU2-02, TC-HU2-03, TC-HU2-05, TC-HU2-07 |
 | HU3 | TC-HU3-01, TC-HU3-03 |
-| HU5 | TC-HU5-01, TC-HU5-02 |
+| HU5 | TC-HU5-01 |
 | HU6 | TC-HU6-01, TC-HU6-02 |
 | HU7 | Sin casos activos en el suite por defecto |
 | HU11 | TC-HU11-01, TC-HU11-02, TC-HU11-03, TC-HU11-04 |
@@ -135,6 +137,7 @@ Notas de implementación:
 
 - Se aplicó DDT en negativos y edge cases donde sí reducía repetición, especialmente en HU2 y HU11.
 - Se usan fechas dinámicas para evitar colisiones entre corridas porque los holds viven 10 minutos.
+- La logica procedural de seleccion de habitaciones, bloqueos masivos y busqueda de pagos se centraliza en [src/test/java/common/workflows.js](src/test/java/common/workflows.js) para mantener los features declarativos.
 - La suite valida comportamiento real observado del backend, no el texto idealizado de la matriz cuando ambos difieren.
 
 ## Decisiones técnicas
