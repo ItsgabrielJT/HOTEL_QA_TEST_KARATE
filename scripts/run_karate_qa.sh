@@ -523,9 +523,19 @@ if [[ "${QA_MODE}" == "all" || "${QA_MODE}" == "zap" ]]; then
     source "${STATE_FILE}" 2>/dev/null || true
   fi
 
-  mkdir -p "${ARTIFACTS_DIR}"
+  mkdir -p "${ARTIFACTS_DIR}" "${REPORTS_DIR}"
   sed "s/__QA_API_PORT__/${QA_API_PORT}/g" "${ROOT_DIR}/qa/zap/openapi.yaml" > "${ARTIFACTS_DIR}/zap-openapi.generated.yaml"
-  # [FIX-S4] Eliminado chmod -R a+rwX: permisos world-writable innecesarios en runner efimero.
+
+  # Pre-crear los archivos de reporte con permisos de escritura para todos los
+  # usuarios. ZAP corre dentro de un contenedor Docker como uid no-root y no
+  # puede crear archivos nuevos en el mount; si el archivo ya existe con 666
+  # puede sobreescribirlo sin problema.
+  touch "${REPORTS_DIR}/zap-report.html" \
+        "${REPORTS_DIR}/zap-report.md" \
+        "${REPORTS_DIR}/zap-report.json"
+  chmod 666 "${REPORTS_DIR}/zap-report.html" \
+             "${REPORTS_DIR}/zap-report.md" \
+             "${REPORTS_DIR}/zap-report.json"
 
   ZAP_OPENAPI_PATH="${ARTIFACTS_DIR#"${ROOT_DIR}"/}/zap-openapi.generated.yaml"
   ZAP_REPORT_HTML_PATH="${REPORTS_DIR#"${ROOT_DIR}"/}/zap-report.html"
@@ -552,10 +562,26 @@ if [[ "${QA_MODE}" == "all" || "${QA_MODE}" == "zap" ]]; then
     printf 'ZAP_EXIT=%q\n' "${ZAP_EXIT}" >> "${STATE_FILE}"
     generate_zap_summary || true
     case "${ZAP_EXIT}" in
-      0) ;;
-      2) log 'OWASP ZAP termino con advertencias no bloqueantes' ;;
-      1|3) log 'OWASP ZAP reporto hallazgos bloqueantes o error de ejecucion'; exit "${ZAP_EXIT}" ;;
-      *) log "OWASP ZAP devolvio un codigo inesperado: ${ZAP_EXIT}"; exit "${ZAP_EXIT}" ;;
+      0)
+        log 'OWASP ZAP finalizo sin hallazgos'
+        ;;
+      1)
+        # FAIL-NEW: ZAP encontro vulnerabilidades de seguridad. Se genera el
+        # reporte completo pero el job NO falla; el equipo revisa el artefacto.
+        log 'OWASP ZAP reporto hallazgos de seguridad (FAIL-NEW): revisa el reporte ZAP'
+        ;;
+      2)
+        log 'OWASP ZAP termino con advertencias (WARN-NEW): revisa el reporte ZAP'
+        ;;
+      3)
+        # Error real de ejecucion: el target no era alcanzable, fallo el scan.
+        log 'OWASP ZAP fallo en la ejecucion (exit 3): error de infraestructura o configuracion'
+        exit 3
+        ;;
+      *)
+        log "OWASP ZAP devolvio codigo inesperado: ${ZAP_EXIT}"
+        exit "${ZAP_EXIT}"
+        ;;
     esac
     exit 0
   fi
@@ -568,16 +594,19 @@ fi
 
 case "${ZAP_EXIT}" in
   0) ;;
-  1|3) log 'OWASP ZAP reporto hallazgos bloqueantes o error de ejecucion' ;;
-  2)   log 'OWASP ZAP termino con advertencias no bloqueantes' ;;
-  *)   log "OWASP ZAP devolvio un codigo inesperado: ${ZAP_EXIT}" ;;
+  1) log 'OWASP ZAP reporto hallazgos de seguridad (FAIL-NEW): revisa el reporte ZAP' ;;
+  2) log 'OWASP ZAP termino con advertencias (WARN-NEW): revisa el reporte ZAP' ;;
+  3) log 'OWASP ZAP fallo en la ejecucion (exit 3): error de infraestructura o configuracion' ;;
+  *) log "OWASP ZAP devolvio codigo inesperado: ${ZAP_EXIT}" ;;
 esac
 
 if [[ ${KARATE_EXIT} -ne 0 ]]; then
   exit "${KARATE_EXIT}"
 fi
 
-if [[ ${ZAP_EXIT} -eq 1 || ${ZAP_EXIT} -eq 3 || ${ZAP_EXIT} -gt 3 ]]; then
+# Solo exit 3 (error de ejecucion real) falla el pipeline en modo all.
+# Exit 1 (hallazgos de seguridad) y 2 (warnings) solo se reportan.
+if [[ ${ZAP_EXIT} -eq 3 || ${ZAP_EXIT} -gt 3 ]]; then
   exit "${ZAP_EXIT}"
 fi
 
