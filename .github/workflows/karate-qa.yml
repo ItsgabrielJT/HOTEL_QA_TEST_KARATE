@@ -28,6 +28,8 @@ on:
       failure_issues_enabled:
         description: Crear o actualizar issue automaticamente cuando falle la suite
         required: false
+  repository_dispatch:
+    types: [e2e-trigger]
   schedule:
     - cron: '0 */6 * * *'
   push:
