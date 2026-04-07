@@ -75,6 +75,10 @@ jobs:
           summary_file: qa-artifacts/karate/reports/karate-summary.md
           job_name: Karate Tests
 
+      - name: Teardown infrastructure
+        if: always()
+        uses: ./.github/actions/teardown-infra
+
       - name: Upload Karate artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -83,7 +87,3 @@ jobs:
           path: qa-artifacts/karate
           if-no-files-found: warn
           retention-days: 14
-
-      - name: Teardown infrastructure
-        if: always()
-        uses: ./.github/actions/teardown-infra
