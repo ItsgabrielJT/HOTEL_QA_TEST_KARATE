@@ -1,17 +1,14 @@
 name: Setup Node.js with cached npm
 description: |
-  Checkout del repositorio, configura Node.js 20 y restaura la caché npm.
+  Configura Node.js 20 y restaura la caché npm.
   Requiere que TARGET_REPO_URL y TARGET_REPO_BRANCH estén definidas como
   variables de entorno en el job llamante (usadas como clave de caché).
+  El job llamante debe haber ejecutado actions/checkout antes de invocar
+  esta action.
 
 runs:
   using: composite
   steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 1
-
     - name: Set up Node.js
       uses: actions/setup-node@v4
       with:

@@ -47,6 +47,11 @@ jobs:
       TARGET_CLONE_DIR: ${{ github.workspace }}/target-under-test
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
       - name: Setup Node.js with npm cache
         uses: ./.github/actions/setup-node-cached
 

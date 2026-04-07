@@ -42,6 +42,11 @@ jobs:
       GRADLE_OPTS: "-Dorg.gradle.daemon=false"
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
       - name: Setup Node.js with npm cache
         uses: ./.github/actions/setup-node-cached
 
