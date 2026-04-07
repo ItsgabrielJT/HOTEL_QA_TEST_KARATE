@@ -35,6 +35,8 @@ on:
       - main
     paths:
       - .github/workflows/karate-qa.yml
+      - .github/workflows/reusable-*.yml
+      - .github/actions/**
       - scripts/**
       - qa/**
       - README.md
@@ -48,6 +50,8 @@ on:
       - main
     paths:
       - .github/workflows/karate-qa.yml
+      - .github/workflows/reusable-*.yml
+      - .github/actions/**
       - scripts/**
       - qa/**
       - README.md
