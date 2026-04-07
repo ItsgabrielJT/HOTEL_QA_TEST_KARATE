@@ -1,0 +1,15 @@
+name: Start QA Infrastructure
+description: |
+  Lanza la infraestructura QA (PostgreSQL + API) ejecutando run_karate_qa.sh
+  en modo 'infra'. El job llamante debe tener definidas las variables de
+  entorno: COMPOSE_PROJECT_NAME, TARGET_REPO_URL, TARGET_REPO_BRANCH,
+  QA_DB_PORT, QA_API_PORT, QA_ARTIFACTS_DIR, TARGET_CLONE_DIR.
+
+runs:
+  using: composite
+  steps:
+    - name: Start infrastructure (DB + API)
+      shell: bash
+      run: bash scripts/run_karate_qa.sh
+      env:
+        QA_MODE: infra

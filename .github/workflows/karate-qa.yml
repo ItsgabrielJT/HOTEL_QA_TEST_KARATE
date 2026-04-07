@@ -1,6 +1,5 @@
 name: Karate QA
 
-# [FIX-S1] Permisos minimos al nivel del workflow. issues:write solo en el job que lo necesita.
 permissions:
   contents: read
 
@@ -59,314 +58,41 @@ on:
       - postman/**
 
 jobs:
-  # ── Job 1: Lint ────────────────────────────────────────────────────────────
   lint:
     name: Lint
-    runs-on: ubuntu-22.04
-    timeout-minutes: 10
+    uses: ./.github/workflows/reusable-lint.yml
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Install linting tools
-        # [FIX-M2] Agregar yamllint para validar el propio workflow y otros YAMLs del repo.
-        run: sudo apt-get update && sudo apt-get install -y shellcheck yamllint
-
-      - name: Validate shell scripts
-        run: |
-          bash -n scripts/run_karate_qa.sh
-          shellcheck scripts/run_karate_qa.sh
-
-      - name: Validate workflow YAML
-        # [FIX-M2] Detectar errores de sintaxis YAML antes de que fallen los jobs.
-        run: >-
-          yamllint
-          -d "{extends: relaxed, rules: {line-length: {max: 120}}}"
-          .github/workflows/karate-qa.yml
-
-      - name: Validate OpenAPI spec
-        # [FIX-M2] Verificar que el spec usado por ZAP sea OpenAPI valido.
-        run: |
-          npx --yes @redocly/cli lint qa/zap/openapi.yaml --format=stylish || true
-
-  # ── Job 2: Infrastructure ──────────────────────────────────────────────────
-  # Gate dedicado: valida inputs, clona el repo objetivo, levanta PostgreSQL +
-  # API, confirma que la infra arranca correctamente y sube el commit SHA como
-  # artifact. Si este job falla, karate-tests y zap-scan no se ejecutan.
   infra:
     name: Start Infrastructure
     needs: lint
-    runs-on: ubuntu-22.04
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    env:
-      COMPOSE_PROJECT_NAME: hotel-infra-${{ github.run_id }}
-      TARGET_REPO_URL: ${{ inputs.target_repo_url || vars.DB_QA_TARGET_REPO_URL }}
-      TARGET_REPO_BRANCH: ${{ inputs.target_repo_branch || vars.DB_QA_TARGET_REPO_BRANCH }}
-      QA_DB_PORT: ${{ inputs.qa_db_port || vars.DB_QA_DB_PORT }}
-      QA_API_PORT: ${{ inputs.qa_api_port || vars.DB_QA_API_PORT }}
-      QA_ARTIFACTS_DIR: ${{ github.workspace }}/qa-artifacts/infra
-      TARGET_CLONE_DIR: ${{ github.workspace }}/target-under-test
+    uses: ./.github/workflows/reusable-infra.yml
+    with:
+      target_repo_url: ${{ inputs.target_repo_url }}
+      target_repo_branch: ${{ inputs.target_repo_branch }}
+      qa_db_port: ${{ inputs.qa_db_port }}
+      qa_api_port: ${{ inputs.qa_api_port }}
+      event_name: ${{ github.event_name }}
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Cache npm dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: npm-${{ env.TARGET_REPO_URL }}-${{ env.TARGET_REPO_BRANCH }}
-          restore-keys: |
-            npm-${{ env.TARGET_REPO_URL }}-
-
-      - name: Validate workflow_dispatch inputs
-        # [FIX-S5] Rechazar valores de puerto no numericos antes de que lleguen al sed del script.
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          if [[ -n "$QA_API_PORT" && ! "$QA_API_PORT" =~ ^[0-9]{2,5}$ ]]; then
-            echo "::error::qa_api_port debe ser un numero de puerto valido (2-5 digitos): '$QA_API_PORT'"
-            exit 1
-          fi
-          if [[ -n "$QA_DB_PORT" && ! "$QA_DB_PORT" =~ ^[0-9]{2,5}$ ]]; then
-            echo "::error::qa_db_port debe ser un numero de puerto valido (2-5 digitos): '$QA_DB_PORT'"
-            exit 1
-          fi
-
-      - name: Start infrastructure (Docker + API)
-        # Clona el repo objetivo, levanta PostgreSQL via Docker Compose, instala
-        # dependencias Node, ejecuta seed/build y arranca la API en background.
-        run: bash scripts/run_karate_qa.sh
-        env:
-          QA_MODE: infra
-
-      - name: Health check
-        # Unico punto de verificacion: si la API no responde aqui el pipeline se
-        # detiene y ninguno de los jobs de test se ejecuta.
-        run: |
-          echo "Esperando respuesta de la API en http://127.0.0.1:${QA_API_PORT}/health ..."
-          until curl --fail --silent --show-error --max-time 5 \
-                "http://127.0.0.1:${QA_API_PORT}/health"; do
-            sleep 3
-          done
-          echo "API lista y respondiendo."
-
-      - name: Publish infra summary
-        if: always()
-        run: |
-          SUMMARY_FILE="qa-artifacts/infra/reports/infra-summary.md"
-          if [[ -f "${SUMMARY_FILE}" ]]; then
-            cat "${SUMMARY_FILE}" >> "${GITHUB_STEP_SUMMARY}"
-          else
-            echo "### Infraestructura" >> "${GITHUB_STEP_SUMMARY}"
-            echo "Resumen no generado (el script puede haber fallado antes de completar)." \
-              >> "${GITHUB_STEP_SUMMARY}"
-          fi
-
-      - name: Export infra metadata
-        # Persiste configuracion de la infra validada para que los jobs
-        # de test puedan referencia el mismo commit SHA.
-        run: |
-          mkdir -p qa-artifacts/infra/pipeline
-          TARGET_COMMIT="$(git -C target-under-test rev-parse HEAD 2>/dev/null || echo unknown)"
-          printf 'TARGET_COMMIT=%s\n' "${TARGET_COMMIT}" \
-            > qa-artifacts/infra/pipeline/infra-meta.env
-          echo "Commit validado: ${TARGET_COMMIT}"
-
-      - name: Upload infra metadata artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: infra-meta-${{ github.run_id }}
-          path: qa-artifacts/infra/pipeline/infra-meta.env
-          retention-days: 1
-
-      - name: Teardown infrastructure
-        if: always()
-        # El runner de este job se descarta; bajamos Compose limpiamente.
-        run: bash scripts/run_karate_qa.sh
-        env:
-          QA_MODE: cleanup
-          QA_ARTIFACTS_DIR: ${{ github.workspace }}/qa-artifacts/infra
-
-  # ── Job 3: Karate Tests ────────────────────────────────────────────────────
-  # Levanta infra propia (runner independiente), ejecuta toda la suite Karate
-  # y limpia al finalizar. Corre en paralelo con zap-scan.
   karate-tests:
     name: Karate Tests
     needs: infra
-    runs-on: ubuntu-22.04
-    timeout-minutes: 30
-    permissions:
-      contents: read
-    env:
-      COMPOSE_PROJECT_NAME: hotel-karate-${{ github.run_id }}
-      TARGET_REPO_URL: ${{ inputs.target_repo_url || vars.DB_QA_TARGET_REPO_URL }}
-      TARGET_REPO_BRANCH: ${{ inputs.target_repo_branch || vars.DB_QA_TARGET_REPO_BRANCH }}
-      QA_DB_PORT: ${{ inputs.qa_db_port || vars.DB_QA_DB_PORT }}
-      QA_API_PORT: ${{ inputs.qa_api_port || vars.DB_QA_API_PORT }}
-      QA_ARTIFACTS_DIR: ${{ github.workspace }}/qa-artifacts/karate
-      TARGET_CLONE_DIR: ${{ github.workspace }}/target-under-test
-      # [FIX-C3] Gradle daemon innecesario en runners efimeros.
-      GRADLE_OPTS: "-Dorg.gradle.daemon=false"
+    uses: ./.github/workflows/reusable-tests.yml
+    with:
+      target_repo_url: ${{ inputs.target_repo_url }}
+      target_repo_branch: ${{ inputs.target_repo_branch }}
+      qa_db_port: ${{ inputs.qa_db_port }}
+      qa_api_port: ${{ inputs.qa_api_port }}
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Set up Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-          cache: gradle
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Cache npm dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: npm-${{ env.TARGET_REPO_URL }}-${{ env.TARGET_REPO_BRANCH }}
-          restore-keys: |
-            npm-${{ env.TARGET_REPO_URL }}-
-
-      - name: Start infrastructure (DB + API)
-        run: bash scripts/run_karate_qa.sh
-        env:
-          QA_MODE: infra
-
-      - name: Run Karate tests
-        run: bash scripts/run_karate_qa.sh
-        env:
-          QA_MODE: karate
-
-      - name: Publish Karate summary
-        if: always()
-        run: |
-          SUMMARY_FILE="qa-artifacts/karate/reports/karate-summary.md"
-          if [[ -f "${SUMMARY_FILE}" ]]; then
-            cat "${SUMMARY_FILE}" >> "${GITHUB_STEP_SUMMARY}"
-          else
-            echo "### Karate Tests" >> "${GITHUB_STEP_SUMMARY}"
-            echo "Resumen no generado (el script puede haber fallado antes de completar)." \
-              >> "${GITHUB_STEP_SUMMARY}"
-          fi
-
-      - name: Upload Karate artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: karate-artifacts-${{ github.run_id }}
-          path: qa-artifacts/karate
-          if-no-files-found: warn
-          # [FIX-C4] 14 dias evita acumulacion excessiva con schedule c/6h.
-          retention-days: 14
-
-      - name: Teardown infrastructure
-        if: always()
-        run: bash scripts/run_karate_qa.sh
-        env:
-          QA_MODE: cleanup
-          QA_ARTIFACTS_DIR: ${{ github.workspace }}/qa-artifacts/karate
-
-  # ── Job 4: OWASP ZAP Scan ─────────────────────────────────────────────────
-  # Levanta infra propia (runner independiente), ejecuta el scan DAST y limpia.
-  # Corre en paralelo con karate-tests. No requiere Java.
   zap-scan:
     name: OWASP ZAP Scan
     needs: infra
-    runs-on: ubuntu-22.04
-    timeout-minutes: 20
-    permissions:
-      contents: read
-    env:
-      COMPOSE_PROJECT_NAME: hotel-zap-${{ github.run_id }}
-      TARGET_REPO_URL: ${{ inputs.target_repo_url || vars.DB_QA_TARGET_REPO_URL }}
-      TARGET_REPO_BRANCH: ${{ inputs.target_repo_branch || vars.DB_QA_TARGET_REPO_BRANCH }}
-      QA_DB_PORT: ${{ inputs.qa_db_port || vars.DB_QA_DB_PORT }}
-      QA_API_PORT: ${{ inputs.qa_api_port || vars.DB_QA_API_PORT }}
-      QA_ARTIFACTS_DIR: ${{ github.workspace }}/qa-artifacts/zap
-      TARGET_CLONE_DIR: ${{ github.workspace }}/target-under-test
+    uses: ./.github/workflows/reusable-security.yml
+    with:
+      target_repo_url: ${{ inputs.target_repo_url }}
+      target_repo_branch: ${{ inputs.target_repo_branch }}
+      qa_db_port: ${{ inputs.qa_db_port }}
+      qa_api_port: ${{ inputs.qa_api_port }}
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      # ZAP scan no requiere Java/Gradle: setup mas ligero que karate-tests.
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Cache npm dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: npm-${{ env.TARGET_REPO_URL }}-${{ env.TARGET_REPO_BRANCH }}
-          restore-keys: |
-            npm-${{ env.TARGET_REPO_URL }}-
-
-      - name: Start infrastructure (DB + API)
-        run: bash scripts/run_karate_qa.sh
-        env:
-          QA_MODE: infra
-
-      - name: Run OWASP ZAP scan
-        run: bash scripts/run_karate_qa.sh
-        env:
-          QA_MODE: zap
-
-      - name: Publish ZAP summary
-        if: always()
-        run: |
-          SUMMARY_FILE="qa-artifacts/zap/reports/zap-summary.md"
-          if [[ -f "${SUMMARY_FILE}" ]]; then
-            cat "${SUMMARY_FILE}" >> "${GITHUB_STEP_SUMMARY}"
-          else
-            echo "### OWASP ZAP Scan" >> "${GITHUB_STEP_SUMMARY}"
-            echo "Resumen no generado (el script puede haber fallado antes de completar)." \
-              >> "${GITHUB_STEP_SUMMARY}"
-          fi
-
-      - name: Upload ZAP artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: zap-artifacts-${{ github.run_id }}
-          path: qa-artifacts/zap
-          if-no-files-found: warn
-          retention-days: 14
-
-      - name: Teardown infrastructure
-        if: always()
-        run: bash scripts/run_karate_qa.sh
-        env:
-          QA_MODE: cleanup
-          QA_ARTIFACTS_DIR: ${{ github.workspace }}/qa-artifacts/zap
-
-  # ── Job 5: Publish Report & Notify ────────────────────────────────────────
-  # Descarga artefactos de los jobs de test, publica Pages, gestiona issues.
   publish-and-notify:
     name: Publish Report & Notify
     needs: [karate-tests, zap-scan]
@@ -377,208 +103,15 @@ jobs:
         needs.karate-tests.result == 'success' || needs.karate-tests.result == 'failure' ||
         needs.zap-scan.result   == 'success' || needs.zap-scan.result   == 'failure'
       )
-    runs-on: ubuntu-22.04
-    timeout-minutes: 15
+    uses: ./.github/workflows/reusable-publish.yml
     permissions:
       contents: read
       issues: write
       pages: write
       id-token: write
-    env:
-      TARGET_REPO_URL: ${{ inputs.target_repo_url || vars.DB_QA_TARGET_REPO_URL }}
-      TARGET_REPO_BRANCH: ${{ inputs.target_repo_branch || vars.DB_QA_TARGET_REPO_BRANCH }}
-      DB_QA_FAILURE_ISSUES_ENABLED: ${{ inputs.failure_issues_enabled || vars.DB_QA_FAILURE_ISSUES_ENABLED }}
-    environment:
-      name: karate-qa-report
-      url: ${{ steps.deploy-pages.outputs.page_url }}
-
-    steps:
-      - name: Download Karate artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: karate-artifacts-${{ github.run_id }}
-          path: downloaded-artifacts/karate
-
-      - name: Download ZAP artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: zap-artifacts-${{ github.run_id }}
-          path: downloaded-artifacts/zap
-
-      - name: Build failure issue body
-        if: >-
-          (needs.karate-tests.result == 'failure' || needs.zap-scan.result == 'failure') &&
-          env.DB_QA_FAILURE_ISSUES_ENABLED == 'true'
-        run: |
-          mkdir -p qa-artifacts/merged
-          {
-            echo "# Karate QA failure"
-            echo
-            echo "- Target repo: ${TARGET_REPO_URL}"
-            echo "- Target branch: ${TARGET_REPO_BRANCH}"
-            echo "- Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-            echo "- Karate job: ${{ needs.karate-tests.result }}"
-            echo "- ZAP job: ${{ needs.zap-scan.result }}"
-            echo
-            echo "## Karate log tail"
-            echo '```text'
-            tail -n 60 downloaded-artifacts/karate/logs/gradle-karate.log 2>/dev/null || echo "Karate log unavailable"
-            echo '```'
-            echo
-            echo "## ZAP findings tail"
-            echo '```text'
-            grep -E 'WARN-NEW|FAIL-NEW|FAIL-INPROG|ERROR|Permission denied' \
-              downloaded-artifacts/zap/logs/zap.log 2>/dev/null | tail -n 80 || echo "ZAP findings unavailable"
-            echo '```'
-            echo
-            if [ -f downloaded-artifacts/zap/reports/zap-report.md ]; then
-              echo "## ZAP summary"
-              sed -n '1,120p' downloaded-artifacts/zap/reports/zap-report.md
-              echo
-            fi
-            echo "## Backend log tail"
-            echo '```text'
-            tail -n 40 downloaded-artifacts/karate/logs/backend.log 2>/dev/null || echo "Backend log unavailable"
-            echo '```'
-          } > qa-artifacts/merged/issue-body.md
-
-          ISSUE_BODY_MAX_CHARS=60000
-          ISSUE_BODY_SIZE=$(wc -c < qa-artifacts/merged/issue-body.md | tr -d ' ')
-          if [ "${ISSUE_BODY_SIZE}" -gt "${ISSUE_BODY_MAX_CHARS}" ]; then
-            tmp_file=$(mktemp)
-            head -c "${ISSUE_BODY_MAX_CHARS}" qa-artifacts/merged/issue-body.md > "${tmp_file}"
-            printf '\n\n[contenido truncado automaticamente por limite de GitHub Issues]\n' >> "${tmp_file}"
-            mv "${tmp_file}" qa-artifacts/merged/issue-body.md
-          fi
-
-      - name: Create or update failure issue
-        if: >-
-          (needs.karate-tests.result == 'failure' || needs.zap-scan.result == 'failure') &&
-          env.DB_QA_FAILURE_ISSUES_ENABLED == 'true'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const title = `Karate QA failure: ${process.env.TARGET_REPO_BRANCH} @ ${process.env.TARGET_REPO_URL}`;
-            const maxBodyLength = 60000;
-            const rawBody = fs.readFileSync('qa-artifacts/merged/issue-body.md', 'utf8');
-            const body = rawBody.length > maxBodyLength
-              ? `${rawBody.slice(0, maxBodyLength)}\n\n[contenido truncado automaticamente por limite de GitHub Issues]`
-              : rawBody;
-            const labels = ['qa-failure', 'karate-qa', 'karate', 'owasp-zap'];
-
-            for (const name of labels) {
-              try {
-                await github.rest.issues.createLabel({ owner, repo, name });
-              } catch (error) {
-                if (error.status !== 422) throw error;
-              }
-            }
-
-            const search = await github.rest.search.issuesAndPullRequests({
-              q: `repo:${owner}/${repo} is:issue in:title "${title}"`,
-              per_page: 1,
-            });
-
-            if (search.data.items.length > 0) {
-              const issue_number = search.data.items[0].number;
-              if (search.data.items[0].state === 'closed') {
-                await github.rest.issues.update({ owner, repo, issue_number, state: 'open' });
-              }
-              await github.rest.issues.addLabels({ owner, repo, issue_number, labels });
-              await github.rest.issues.createComment({ owner, repo, issue_number, body });
-              core.info(`Updated existing issue #${issue_number}`);
-            } else {
-              const created = await github.rest.issues.create({ owner, repo, title, body, labels });
-              core.info(`Created new issue #${created.data.number}`);
-            }
-
-      - name: Resolve open failure issue on success
-        if: >-
-          needs.karate-tests.result == 'success' &&
-          needs.zap-scan.result == 'success' &&
-          env.DB_QA_FAILURE_ISSUES_ENABLED == 'true'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const title = `Karate QA failure: ${process.env.TARGET_REPO_BRANCH} @ ${process.env.TARGET_REPO_URL}`;
-            const resolutionBody = [
-              '# Karate QA recovery',
-              '',
-              `- Target repo: ${process.env.TARGET_REPO_URL}`,
-              `- Target branch: ${process.env.TARGET_REPO_BRANCH}`,
-              `- Workflow run: ${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
-              '',
-              'Karate y ZAP volvieron a pasar. Se cierra el issue automaticamente.',
-            ].join('\n');
-
-            const search = await github.rest.search.issuesAndPullRequests({
-              q: `repo:${owner}/${repo} is:issue is:open in:title "${title}"`,
-              per_page: 1,
-            });
-
-            if (search.data.items.length > 0) {
-              const issue_number = search.data.items[0].number;
-              await github.rest.issues.createComment({ owner, repo, issue_number, body: resolutionBody });
-              await github.rest.issues.update({ owner, repo, issue_number, state: 'closed' });
-              core.info(`Closed issue #${issue_number}`);
-            } else {
-              core.info('No open failure issue to close');
-            }
-
-      - name: Configure GitHub Pages
-        uses: actions/configure-pages@v5
-
-      - name: Prepare GitHub Pages content
-        run: |
-          mkdir -p pages-site
-          # Contenido Karate (reporte principal)
-          if [ -d downloaded-artifacts/karate/reports/karate-pages ]; then
-            cp -R downloaded-artifacts/karate/reports/karate-pages/. pages-site/
-          fi
-          # Contenido ZAP (reportes de seguridad)
-          mkdir -p pages-site/security
-          cp -p downloaded-artifacts/zap/reports/zap-report.html pages-site/security/ 2>/dev/null || true
-          cp -p downloaded-artifacts/zap/reports/zap-report.md   pages-site/security/ 2>/dev/null || true
-          # Fallback index si el reporte nativo de Karate no se genero
-          if [ ! -f pages-site/index.html ]; then
-            cat > pages-site/index.html <<'EOF'
-          <!doctype html>
-          <html lang="es">
-            <head>
-              <meta charset="utf-8" />
-              <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-              <meta http-equiv="Pragma" content="no-cache" />
-              <meta http-equiv="Expires" content="0" />
-              <meta name="viewport" content="width=device-width, initial-scale=1" />
-              <title>Karate QA</title>
-              <style>
-                body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #1f2937; }
-                main { max-width: 56rem; }
-              </style>
-            </head>
-            <body>
-              <main>
-                <h1>Karate QA</h1>
-                <p>La ejecucion no genero el reporte nativo de Karate esperado.</p>
-                <p>Karate: <strong>${{ needs.karate-tests.result }}</strong> | ZAP: <strong>${{ needs.zap-scan.result }}</strong></p>
-                <p>Run: <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">${{ github.run_id }}</a></p>
-              </main>
-            </body>
-          </html>
-          EOF
-          fi
-          touch pages-site/.nojekyll
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: pages-site
-
-      - name: Deploy GitHub Pages
-        id: deploy-pages
-        uses: actions/deploy-pages@v4
+    with:
+      target_repo_url: ${{ inputs.target_repo_url }}
+      target_repo_branch: ${{ inputs.target_repo_branch }}
+      failure_issues_enabled: ${{ inputs.failure_issues_enabled }}
+      karate_result: ${{ needs.karate-tests.result }}
+      zap_result: ${{ needs.zap-scan.result }}

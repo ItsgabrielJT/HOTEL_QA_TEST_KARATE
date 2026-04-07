@@ -1,0 +1,27 @@
+name: Publish Step Summary
+description: |
+  Publica el contenido de un archivo Markdown en el resumen del paso de GitHub
+  (GITHUB_STEP_SUMMARY). Si el archivo no existe, registra un mensaje de
+  fallback indicando que el script falló antes de generar el reporte.
+
+inputs:
+  summary_file:
+    description: Ruta relativa al archivo Markdown de resumen a publicar
+    required: true
+  job_name:
+    description: Nombre del job para el encabezado del mensaje de fallback
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Publish step summary
+      shell: bash
+      run: |
+        if [[ -f "${{ inputs.summary_file }}" ]]; then
+          cat "${{ inputs.summary_file }}" >> "${GITHUB_STEP_SUMMARY}"
+        else
+          echo "### ${{ inputs.job_name }}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Resumen no generado (el script puede haber fallado antes de completar)." \
+            >> "${GITHUB_STEP_SUMMARY}"
+        fi

@@ -1,0 +1,84 @@
+name: Reusable – Karate Tests
+
+on:
+  workflow_call:
+    inputs:
+      target_repo_url:
+        description: Repositorio Git objetivo (sobreescribe vars.DB_QA_TARGET_REPO_URL)
+        type: string
+        required: false
+      target_repo_branch:
+        description: Rama del repositorio objetivo (sobreescribe vars.DB_QA_TARGET_REPO_BRANCH)
+        type: string
+        required: false
+      qa_db_port:
+        description: Puerto host para PostgreSQL (sobreescribe vars.DB_QA_DB_PORT)
+        type: string
+        required: false
+      qa_api_port:
+        description: Puerto host para la API (sobreescribe vars.DB_QA_API_PORT)
+        type: string
+        required: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+
+  karate-tests:
+    name: Karate Tests
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      COMPOSE_PROJECT_NAME: hotel-karate-${{ github.run_id }}
+      TARGET_REPO_URL: ${{ inputs.target_repo_url || vars.DB_QA_TARGET_REPO_URL }}
+      TARGET_REPO_BRANCH: ${{ inputs.target_repo_branch || vars.DB_QA_TARGET_REPO_BRANCH }}
+      QA_DB_PORT: ${{ inputs.qa_db_port || vars.DB_QA_DB_PORT }}
+      QA_API_PORT: ${{ inputs.qa_api_port || vars.DB_QA_API_PORT }}
+      QA_ARTIFACTS_DIR: ${{ github.workspace }}/qa-artifacts/karate
+      TARGET_CLONE_DIR: ${{ github.workspace }}/target-under-test
+      GRADLE_OPTS: "-Dorg.gradle.daemon=false"
+
+    steps:
+      - name: Setup Node.js with npm cache
+        uses: ./.github/actions/setup-node-cached
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Start infrastructure (DB + API)
+        uses: ./.github/actions/run-infra
+
+      - name: Run Karate tests
+        run: bash scripts/run_karate_qa.sh
+        env:
+          QA_MODE: karate
+
+      - name: Publish Karate summary
+        if: always()
+        uses: ./.github/actions/publish-step-summary
+        with:
+          summary_file: qa-artifacts/karate/reports/karate-summary.md
+          job_name: Karate Tests
+
+      - name: Upload Karate artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: karate-artifacts-${{ github.run_id }}
+          path: qa-artifacts/karate
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Teardown infrastructure
+        if: always()
+        uses: ./.github/actions/teardown-infra

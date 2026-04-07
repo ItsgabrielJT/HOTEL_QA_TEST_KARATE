@@ -1,0 +1,235 @@
+name: Reusable – Publish Report & Notify
+
+on:
+  workflow_call:
+    inputs:
+      target_repo_url:
+        description: Repositorio Git objetivo
+        type: string
+        required: false
+      target_repo_branch:
+        description: Rama del repositorio objetivo
+        type: string
+        required: false
+      failure_issues_enabled:
+        description: Crear o actualizar issue automaticamente cuando falle la suite
+        type: string
+        required: false
+      karate_result:
+        description: Resultado del job karate-tests (success | failure | cancelled | skipped)
+        type: string
+        required: true
+      zap_result:
+        description: Resultado del job zap-scan (success | failure | cancelled | skipped)
+        type: string
+        required: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+
+  publish-and-notify:
+    name: Publish Report & Notify
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+      pages: write
+      id-token: write
+    env:
+      TARGET_REPO_URL: ${{ inputs.target_repo_url || vars.DB_QA_TARGET_REPO_URL }}
+      TARGET_REPO_BRANCH: ${{ inputs.target_repo_branch || vars.DB_QA_TARGET_REPO_BRANCH }}
+      DB_QA_FAILURE_ISSUES_ENABLED: ${{ inputs.failure_issues_enabled || vars.DB_QA_FAILURE_ISSUES_ENABLED }}
+    environment:
+      name: karate-qa-report
+      url: ${{ steps.deploy-pages.outputs.page_url }}
+
+    steps:
+      - name: Download Karate artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: karate-artifacts-${{ github.run_id }}
+          path: downloaded-artifacts/karate
+
+      - name: Download ZAP artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: zap-artifacts-${{ github.run_id }}
+          path: downloaded-artifacts/zap
+
+      - name: Build failure issue body
+        if: >-
+          (inputs.karate_result == 'failure' || inputs.zap_result == 'failure') &&
+          env.DB_QA_FAILURE_ISSUES_ENABLED == 'true'
+        run: |
+          mkdir -p qa-artifacts/merged
+          {
+            echo "# Karate QA failure"
+            echo
+            echo "- Target repo: ${TARGET_REPO_URL}"
+            echo "- Target branch: ${TARGET_REPO_BRANCH}"
+            echo "- Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo "- Karate job: ${{ inputs.karate_result }}"
+            echo "- ZAP job: ${{ inputs.zap_result }}"
+            echo
+            echo "## Karate log tail"
+            echo '```text'
+            tail -n 60 downloaded-artifacts/karate/logs/gradle-karate.log 2>/dev/null || echo "Karate log unavailable"
+            echo '```'
+            echo
+            echo "## ZAP findings tail"
+            echo '```text'
+            grep -E 'WARN-NEW|FAIL-NEW|FAIL-INPROG|ERROR|Permission denied' \
+              downloaded-artifacts/zap/logs/zap.log 2>/dev/null | tail -n 80 || echo "ZAP findings unavailable"
+            echo '```'
+            echo
+            if [ -f downloaded-artifacts/zap/reports/zap-report.md ]; then
+              echo "## ZAP summary"
+              sed -n '1,120p' downloaded-artifacts/zap/reports/zap-report.md
+              echo
+            fi
+            echo "## Backend log tail"
+            echo '```text'
+            tail -n 40 downloaded-artifacts/karate/logs/backend.log 2>/dev/null || echo "Backend log unavailable"
+            echo '```'
+          } > qa-artifacts/merged/issue-body.md
+
+          ISSUE_BODY_MAX_CHARS=60000
+          ISSUE_BODY_SIZE=$(wc -c < qa-artifacts/merged/issue-body.md | tr -d ' ')
+          if [ "${ISSUE_BODY_SIZE}" -gt "${ISSUE_BODY_MAX_CHARS}" ]; then
+            tmp_file=$(mktemp)
+            head -c "${ISSUE_BODY_MAX_CHARS}" qa-artifacts/merged/issue-body.md > "${tmp_file}"
+            printf '\n\n[contenido truncado automaticamente por limite de GitHub Issues]\n' >> "${tmp_file}"
+            mv "${tmp_file}" qa-artifacts/merged/issue-body.md
+          fi
+
+      - name: Create or update failure issue
+        if: >-
+          (inputs.karate_result == 'failure' || inputs.zap_result == 'failure') &&
+          env.DB_QA_FAILURE_ISSUES_ENABLED == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const title = `Karate QA failure: ${process.env.TARGET_REPO_BRANCH} @ ${process.env.TARGET_REPO_URL}`;
+            const maxBodyLength = 60000;
+            const rawBody = fs.readFileSync('qa-artifacts/merged/issue-body.md', 'utf8');
+            const body = rawBody.length > maxBodyLength
+              ? `${rawBody.slice(0, maxBodyLength)}\n\n[contenido truncado automaticamente por limite de GitHub Issues]`
+              : rawBody;
+            const labels = ['qa-failure', 'karate-qa', 'karate', 'owasp-zap'];
+
+            for (const name of labels) {
+              try {
+                await github.rest.issues.createLabel({ owner, repo, name });
+              } catch (error) {
+                if (error.status !== 422) throw error;
+              }
+            }
+
+            const search = await github.rest.search.issuesAndPullRequests({
+              q: `repo:${owner}/${repo} is:issue in:title "${title}"`,
+              per_page: 1,
+            });
+
+            if (search.data.items.length > 0) {
+              const issue_number = search.data.items[0].number;
+              if (search.data.items[0].state === 'closed') {
+                await github.rest.issues.update({ owner, repo, issue_number, state: 'open' });
+              }
+              await github.rest.issues.addLabels({ owner, repo, issue_number, labels });
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+              core.info(`Updated existing issue #${issue_number}`);
+            } else {
+              const created = await github.rest.issues.create({ owner, repo, title, body, labels });
+              core.info(`Created new issue #${created.data.number}`);
+            }
+
+      - name: Resolve open failure issue on success
+        if: >-
+          inputs.karate_result == 'success' &&
+          inputs.zap_result == 'success' &&
+          env.DB_QA_FAILURE_ISSUES_ENABLED == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const title = `Karate QA failure: ${process.env.TARGET_REPO_BRANCH} @ ${process.env.TARGET_REPO_URL}`;
+            const resolutionBody = [
+              '# Karate QA recovery',
+              '',
+              `- Target repo: ${process.env.TARGET_REPO_URL}`,
+              `- Target branch: ${process.env.TARGET_REPO_BRANCH}`,
+              `- Workflow run: ${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
+              '',
+              'Karate y ZAP volvieron a pasar. Se cierra el issue automaticamente.',
+            ].join('\n');
+
+            const search = await github.rest.search.issuesAndPullRequests({
+              q: `repo:${owner}/${repo} is:issue is:open in:title "${title}"`,
+              per_page: 1,
+            });
+
+            if (search.data.items.length > 0) {
+              const issue_number = search.data.items[0].number;
+              await github.rest.issues.createComment({ owner, repo, issue_number, body: resolutionBody });
+              await github.rest.issues.update({ owner, repo, issue_number, state: 'closed' });
+              core.info(`Closed issue #${issue_number}`);
+            } else {
+              core.info('No open failure issue to close');
+            }
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Prepare GitHub Pages content
+        run: |
+          mkdir -p pages-site
+          if [ -d downloaded-artifacts/karate/reports/karate-pages ]; then
+            cp -R downloaded-artifacts/karate/reports/karate-pages/. pages-site/
+          fi
+          mkdir -p pages-site/security
+          cp -p downloaded-artifacts/zap/reports/zap-report.html pages-site/security/ 2>/dev/null || true
+          cp -p downloaded-artifacts/zap/reports/zap-report.md   pages-site/security/ 2>/dev/null || true
+          if [ ! -f pages-site/index.html ]; then
+            cat > pages-site/index.html <<'EOF'
+          <!doctype html>
+          <html lang="es">
+            <head>
+              <meta charset="utf-8" />
+              <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+              <meta http-equiv="Pragma" content="no-cache" />
+              <meta http-equiv="Expires" content="0" />
+              <meta name="viewport" content="width=device-width, initial-scale=1" />
+              <title>Karate QA</title>
+              <style>
+                body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #1f2937; }
+                main { max-width: 56rem; }
+              </style>
+            </head>
+            <body>
+              <main>
+                <h1>Karate QA</h1>
+                <p>La ejecucion no genero el reporte nativo de Karate esperado.</p>
+                <p>Karate: <strong>${{ inputs.karate_result }}</strong> | ZAP: <strong>${{ inputs.zap_result }}</strong></p>
+                <p>Run: <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">${{ github.run_id }}</a></p>
+              </main>
+            </body>
+          </html>
+          EOF
+          fi
+          touch pages-site/.nojekyll
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: pages-site
+
+      - name: Deploy GitHub Pages
+        id: deploy-pages
+        uses: actions/deploy-pages@v4

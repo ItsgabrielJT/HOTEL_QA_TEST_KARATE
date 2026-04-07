@@ -1,0 +1,15 @@
+name: Teardown QA Infrastructure
+description: |
+  Detiene la infraestructura QA ejecutando run_karate_qa.sh en modo 'cleanup'.
+  Las variables de entorno del job llamante (COMPOSE_PROJECT_NAME,
+  QA_ARTIFACTS_DIR, etc.) son heredadas automáticamente.
+  Se recomienda invocar con if: always() para garantizar la limpieza.
+
+runs:
+  using: composite
+  steps:
+    - name: Teardown infrastructure
+      shell: bash
+      run: bash scripts/run_karate_qa.sh
+      env:
+        QA_MODE: cleanup

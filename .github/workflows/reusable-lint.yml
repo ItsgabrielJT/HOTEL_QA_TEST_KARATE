@@ -1,0 +1,38 @@
+name: Reusable – Lint
+
+on:
+  workflow_call:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install linting tools
+        run: sudo apt-get update && sudo apt-get install -y shellcheck yamllint
+
+      - name: Validate shell scripts
+        run: |
+          bash -n scripts/run_karate_qa.sh
+          shellcheck scripts/run_karate_qa.sh
+
+      - name: Validate workflow YAML
+        run: >-
+          yamllint
+          -d "{extends: relaxed, rules: {line-length: {max: 120}}}"
+          .github/workflows/karate-qa.yml
+
+      - name: Validate OpenAPI spec
+        run: |
+          npx --yes @redocly/cli lint qa/zap/openapi.yaml --format=stylish || true
