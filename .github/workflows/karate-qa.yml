@@ -30,8 +30,7 @@ on:
         required: false
   repository_dispatch:
     types: [e2e-trigger]
-  schedule:
-    - cron: '0 */6 * * *'
+    
   push:
     branches:
       - main
